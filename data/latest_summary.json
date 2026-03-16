@@ -1,5 +1,33 @@
 [
   {
+    "id": "OMNIPOD5",
+    "ticker": "PODD",
+    "name": "Omnipod 5",
+    "latest_month": "2026-02",
+    "reports": 5652,
+    "z_score": 0.75,
+    "rate": null,
+    "rate_z": 0.4,
+    "divergence": 49.0,
+    "severity_pct": 10.1,
+    "alert": true,
+    "updated": "2026-03-16T22:02:59.401945"
+  },
+  {
+    "id": "OMNIPOD_DASH",
+    "ticker": "PODD",
+    "name": "Omnipod DASH",
+    "latest_month": "2026-02",
+    "reports": 449,
+    "z_score": -0.89,
+    "rate": null,
+    "rate_z": -1.77,
+    "divergence": 22.9,
+    "severity_pct": 5.1,
+    "alert": true,
+    "updated": "2026-03-16T22:02:59.401954"
+  },
+  {
     "id": "OMNIPOD_ALL",
     "ticker": "PODD",
     "name": "All Omnipod (combined)",
@@ -11,7 +39,35 @@
     "divergence": 45.2,
     "severity_pct": 9.7,
     "alert": true,
-    "updated": "2026-03-16T21:58:40.142495"
+    "updated": "2026-03-16T22:02:59.401957"
+  },
+  {
+    "id": "DEXCOM_G7",
+    "ticker": "DXCM",
+    "name": "Dexcom G7",
+    "latest_month": "2026-02",
+    "reports": 15567,
+    "z_score": -0.68,
+    "rate": null,
+    "rate_z": 0.11,
+    "divergence": 44.6,
+    "severity_pct": 1.2,
+    "alert": true,
+    "updated": "2026-03-16T22:02:59.401959"
+  },
+  {
+    "id": "DEXCOM_G6",
+    "ticker": "DXCM",
+    "name": "Dexcom G6",
+    "latest_month": "2026-02",
+    "reports": 4339,
+    "z_score": -1.75,
+    "rate": null,
+    "rate_z": -1.91,
+    "divergence": 15.9,
+    "severity_pct": 1.8,
+    "alert": true,
+    "updated": "2026-03-16T22:02:59.401961"
   },
   {
     "id": "DEXCOM_ALL",
@@ -25,7 +81,7 @@
     "divergence": 37.3,
     "severity_pct": 1.3,
     "alert": true,
-    "updated": "2026-03-16T21:58:40.142503"
+    "updated": "2026-03-16T22:02:59.401963"
   },
   {
     "id": "TSLIM_X2",
@@ -39,20 +95,20 @@
     "divergence": 23.4,
     "severity_pct": 9.3,
     "alert": true,
-    "updated": "2026-03-16T21:58:40.142506"
+    "updated": "2026-03-16T22:02:59.401965"
   },
   {
     "id": "MOBI",
     "ticker": "TNDM",
     "name": "Tandem Mobi",
     "latest_month": "2026-02",
-    "reports": 3098,
+    "reports": 3095,
     "z_score": -0.98,
     "rate": null,
     "rate_z": 0.9,
-    "divergence": 27.0,
-    "severity_pct": 15.8,
+    "divergence": 26.9,
+    "severity_pct": 15.6,
     "alert": true,
-    "updated": "2026-03-16T21:58:40.142508"
+    "updated": "2026-03-16T22:02:59.401967"
   }
 ]
