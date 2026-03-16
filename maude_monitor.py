@@ -45,7 +45,7 @@ DEVICES = [
         "name": "Omnipod 5",
         "ticker": "PODD",
         "group_id": "PODD",
-        "search": 'device.brand_name:"omnipod 5"',
+        "search": 'device.brand_name:"omnipod+5"',
         "recall_firm": "insulet",
         "quarterly_revenue": {
             "2023-Q1": 320, "2023-Q2": 340, "2023-Q3": 360, "2023-Q4": 345,
@@ -58,7 +58,7 @@ DEVICES = [
         "name": "Omnipod DASH",
         "ticker": "PODD",
         "group_id": "PODD",
-        "search": 'device.brand_name:"omnipod dash"',
+        "search": 'device.brand_name:"omnipod+dash"',
         "recall_firm": "insulet",
         "quarterly_revenue": {
             "2023-Q1": 80, "2023-Q2": 78, "2023-Q3": 72, "2023-Q4": 66,
@@ -85,7 +85,7 @@ DEVICES = [
         "name": "Dexcom G7",
         "ticker": "DXCM",
         "group_id": "DXCM",
-        "search": 'device.brand_name:"dexcom g7"',
+        "search": 'device.brand_name:"dexcom+g7"',
         "recall_firm": "dexcom",
         "quarterly_revenue": {
             "2023-Q1": 200, "2023-Q2": 350, "2023-Q3": 500, "2023-Q4": 600,
@@ -98,7 +98,7 @@ DEVICES = [
         "name": "Dexcom G6",
         "ticker": "DXCM",
         "group_id": "DXCM",
-        "search": 'device.brand_name:"dexcom g6"',
+        "search": 'device.brand_name:"dexcom+g6"',
         "recall_firm": "dexcom",
         "quarterly_revenue": {
             "2023-Q1": 521, "2023-Q2": 521, "2023-Q3": 475, "2023-Q4": 410,
@@ -138,7 +138,7 @@ DEVICES = [
         "name": "Tandem Mobi",
         "ticker": "TNDM",
         "group_id": "TNDM",
-        "search": 'device.brand_name:"mobi"',
+        "search": 'device.brand_name:mobi+AND+device.manufacturer_d_name:tandem',
         "recall_firm": "tandem",
         "quarterly_revenue": {
             "2024-Q1": 31, "2024-Q2": 35, "2024-Q3": 35, "2024-Q4": 35,
