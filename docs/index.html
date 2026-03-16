@@ -5,46 +5,39 @@
 <title>MAUDE Failure Rate Monitor</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  * { box-sizing: border-box; margin: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         background: #f8f9fa; color: #1a1a1a; padding: 24px; }
-  .header { max-width: 1000px; margin: 0 auto 24px; }
-  .header h1 { font-size: 22px; font-weight: 600; }
-  .header p { font-size: 13px; color: #6b7280; margin-top: 4px; }
-  .grid { display: grid;
-           grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
-           gap: 16px; max-width: 1000px; margin: 0 auto; }
-  .card { background: #fff; border-radius: 12px;
-           border: 1px solid #e5e7eb; padding: 20px; }
-  .card-header { display: flex; justify-content: space-between;
-                  align-items: center; margin-bottom: 16px; }
-  .card-header h3 { font-size: 16px; font-weight: 600; }
-  .ticker { font-size: 12px; color: #6b7280; }
-  .signal { font-size: 11px; font-weight: 600;
-             padding: 4px 12px; border-radius: 20px; }
-  .metrics { display: grid; grid-template-columns: repeat(3, 1fr);
-              gap: 8px; margin-bottom: 16px; }
-  .metric { background: #f9fafb; border-radius: 8px; padding: 8px 10px; }
-  .metric .label { font-size: 10px; text-transform: uppercase;
-                    color: #9ca3af; letter-spacing: 0.3px; }
-  .metric .value { font-size: 18px; font-weight: 600;
-                    display: block; margin-top: 2px; }
-  .metric .sub { font-size: 11px; color: #9ca3af; }
-  .chart-container { height: 200px; margin-bottom: 8px; }
-  .chart-toggle { display: flex; gap: 4px; }
-  .chart-toggle button { font-size: 11px; padding: 4px 12px;
-    border: 1px solid #e5e7eb; border-radius: 6px;
-    background: #fff; cursor: pointer; font-family: inherit; }
-  .chart-toggle button.active { background: #1a1a1a;
-    color: #fff; border-color: #1a1a1a; }
-  .footer { max-width: 1000px; margin: 24px auto 0;
-             font-size: 11px; color: #9ca3af; }
+  *{box-sizing:border-box;margin:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:#f8f9fa;color:#1a1a1a;padding:24px}
+  .header{max-width:1000px;margin:0 auto 24px}
+  .header h1{font-size:22px;font-weight:600}
+  .header p{font-size:13px;color:#6b7280;margin-top:4px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));
+    gap:16px;max-width:1000px;margin:0 auto}
+  .card{background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:20px}
+  .card-header{display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:16px}
+  .card-header h3{font-size:16px;font-weight:600}
+  .ticker{font-size:12px;color:#6b7280}
+  .signal{font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px}
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
+    margin-bottom:16px}
+  .metric{background:#f9fafb;border-radius:8px;padding:8px 10px}
+  .metric .label{font-size:10px;text-transform:uppercase;color:#9ca3af;
+    letter-spacing:.3px}
+  .metric .value{font-size:18px;font-weight:600;display:block;margin-top:2px}
+  .metric .sub{font-size:11px;color:#9ca3af}
+  .chart-container{height:200px;margin-bottom:8px}
+  .chart-toggle{display:flex;gap:4px}
+  .chart-toggle button{font-size:11px;padding:4px 12px;border:1px solid #e5e7eb;
+    border-radius:6px;background:#fff;cursor:pointer;font-family:inherit}
+  .chart-toggle button.active{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
+  .footer{max-width:1000px;margin:24px auto 0;font-size:11px;color:#9ca3af}
 </style>
 </head><body>
 <div class="header">
   <h1>MAUDE failure rate monitor</h1>
-  <p>openFDA adverse events · Updated 2026-03-16 21:36 ET ·
-     Threshold: 2.0σ</p>
+  <p>openFDA adverse events | Updated 2026-03-16 21:44 ET |
+     Threshold: 2.0s</p>
 </div>
 <div class="grid">
         <div class="card">
@@ -66,12 +59,12 @@
             <div class="metric">
               <span class="label">1yr avg</span>
               <span class="value">5,638</span>
-              <span class="sub">σ=937</span>
+              <span class="sub">sd=937</span>
             </div>
             <div class="metric">
               <span class="label">Z-score</span>
               <span class="value" style="color:#10b981">
-                +0.52σ</span>
+                +0.52s</span>
               <span class="sub">vs 1yr</span>
             </div>
             <div class="metric">
@@ -95,9 +88,11 @@
           </div>
           <div class="chart-toggle">
             <button class="active"
-              onclick="drawChart('PODD','counts',this)">Reports</button>
+              onclick="drawChart('PODD','counts',this)">
+              Reports</button>
             <button
-              onclick="drawChart('PODD','rates',this)">Rate/$M</button>
+              onclick="drawChart('PODD','rates',this)">
+              Rate/$M</button>
           </div>
         </div>
         <div class="card">
@@ -119,12 +114,12 @@
             <div class="metric">
               <span class="label">1yr avg</span>
               <span class="value">33,424</span>
-              <span class="sub">σ=15248</span>
+              <span class="sub">sd=15248</span>
             </div>
             <div class="metric">
               <span class="label">Z-score</span>
               <span class="value" style="color:#10b981">
-                -0.89σ</span>
+                -0.89s</span>
               <span class="sub">vs 1yr</span>
             </div>
             <div class="metric">
@@ -148,9 +143,11 @@
           </div>
           <div class="chart-toggle">
             <button class="active"
-              onclick="drawChart('DXCM','counts',this)">Reports</button>
+              onclick="drawChart('DXCM','counts',this)">
+              Reports</button>
             <button
-              onclick="drawChart('DXCM','rates',this)">Rate/$M</button>
+              onclick="drawChart('DXCM','rates',this)">
+              Rate/$M</button>
           </div>
         </div>
         <div class="card">
@@ -172,12 +169,12 @@
             <div class="metric">
               <span class="label">1yr avg</span>
               <span class="value">3,836</span>
-              <span class="sub">σ=751</span>
+              <span class="sub">sd=751</span>
             </div>
             <div class="metric">
               <span class="label">Z-score</span>
               <span class="value" style="color:#10b981">
-                -0.97σ</span>
+                -0.97s</span>
               <span class="sub">vs 1yr</span>
             </div>
             <div class="metric">
@@ -201,9 +198,11 @@
           </div>
           <div class="chart-toggle">
             <button class="active"
-              onclick="drawChart('TNDM','counts',this)">Reports</button>
+              onclick="drawChart('TNDM','counts',this)">
+              Reports</button>
             <button
-              onclick="drawChart('TNDM','rates',this)">Rate/$M</button>
+              onclick="drawChart('TNDM','rates',this)">
+              Rate/$M</button>
           </div>
         </div></div>
 <div class="footer">
@@ -220,62 +219,29 @@ const CHART_DATA = {
   "TNDM": {"months":["2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"],"counts":[3, 13, 22, 16, 17, 11, 9, 9, 82, 156, 73, 18, 64, 69, 218, 257, 680, 946, 890, 1334, 1393, 1937, 3001, 2416, 2756, 3383, 3895, 3631, 5536, 4356, 4484, 4225, 3137, 3835, 3684, 3104],"ma":[3, 8, 13, 14, 14, 14, 15, 14, 24, 47, 57, 58, 67, 77, 100, 116, 218, 372, 510, 721, 917, 1197, 1584, 1828, 2140, 2481, 2898, 3180, 3603, 3926, 4214, 4354, 4228, 4262, 3954, 3745],"rates":[0.1, 0.2, 0.4, 0.3, 0.3, 0.2, 0.1, 0.1, 1.1, 2.1, 1.3, 0.3, 1.1, 1.1, 3.4, 4.0, 10.2, 14.2, 13.3, 17.0, 17.8, 24.7, 48.7, 39.2, 44.7, 48.3, 55.6, 51.9, 77.2, 60.8, 62.6, 52.8, 39.2, 47.9, 0, 0],"avg1yr":3836},
 };
 
-const charts = {};
-
-function drawChart(deviceId, mode, btn) {
-  if (btn) {
-    btn.parentElement.querySelectorAll('button')
-      .forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-  }
-  const d = CHART_DATA[deviceId];
-  if (!d) return;
-  const ctx = document.getElementById('chart-' + deviceId);
-  if (charts[deviceId]) charts[deviceId].destroy();
-
-  const values = mode === 'rates' ? d.rates : d.counts;
-  const datasets = [{
-    type: 'bar',
-    label: mode === 'rates' ? 'Rate/$M' : 'Reports',
-    data: values,
-    backgroundColor: mode === 'rates'
-      ? 'rgba(249,115,22,0.3)' : 'rgba(59,130,246,0.3)',
-    borderColor: mode === 'rates'
-      ? 'rgb(249,115,22)' : 'rgb(59,130,246)',
-    borderWidth: 1,
-    borderRadius: 2,
-  }];
-
-  if (mode !== 'rates') {
-    datasets.push({
-      type: 'line',
-      label: '6mo MA',
-      data: d.ma,
-      borderColor: 'rgb(37,99,235)',
-      borderWidth: 2,
-      pointRadius: 0,
-      tension: 0.3,
-    });
-  }
-
-  charts[deviceId] = new Chart(ctx, {
-    type: 'bar',
-    data: { labels: d.months, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { intersect: false, mode: 'index' },
-      scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } } },
-        y: { ticks: { font: { size: 10 } } }
-      },
-      plugins: {
-        legend: { labels: { font: { size: 10 } } }
-      }
-    }
-  });
-}
-
-Object.keys(CHART_DATA).forEach(id => drawChart(id, 'counts', null));
+const charts={};
+function drawChart(deviceId,mode,btn){
+  if(btn){btn.parentElement.querySelectorAll('button')
+    .forEach(b=>b.classList.remove('active'));btn.classList.add('active')}
+  const d=CHART_DATA[deviceId];if(!d)return;
+  const ctx=document.getElementById('chart-'+deviceId);
+  if(charts[deviceId])charts[deviceId].destroy();
+  const values=mode==='rates'?d.rates:d.counts;
+  const datasets=[{type:'bar',
+    label:mode==='rates'?'Rate/$M':'Reports',data:values,
+    backgroundColor:mode==='rates'?'rgba(249,115,22,0.3)':'rgba(59,130,246,0.3)',
+    borderColor:mode==='rates'?'rgb(249,115,22)':'rgb(59,130,246)',
+    borderWidth:1,borderRadius:2}];
+  if(mode!=='rates'){datasets.push({type:'line',label:'6mo MA',data:d.ma,
+    borderColor:'rgb(37,99,235)',borderWidth:2,pointRadius:0,tension:0.3})}
+  charts[deviceId]=new Chart(ctx,{type:'bar',
+    data:{labels:d.months,datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{intersect:false,mode:'index'},
+      scales:{x:{ticks:{maxTicksLimit:12,font:{size:10}}},
+        y:{ticks:{font:{size:10}}}},
+      plugins:{legend:{labels:{font:{size:10}}}}
+    }})}
+Object.keys(CHART_DATA).forEach(id=>drawChart(id,'counts',null));
 </script>
 </body></html>
