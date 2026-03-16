@@ -1,32 +1,58 @@
 [
   {
-    "id": "PODD",
+    "id": "OMNIPOD_ALL",
     "ticker": "PODD",
+    "name": "All Omnipod (combined)",
     "latest_month": "2026-02",
     "reports": 6129,
     "z_score": 0.52,
     "rate": null,
-    "alert": false,
-    "updated": "2026-03-16T21:44:28.538183"
+    "rate_z": -0.47,
+    "divergence": 45.2,
+    "severity_pct": 9.7,
+    "alert": true,
+    "updated": "2026-03-16T21:58:40.142495"
   },
   {
-    "id": "DXCM",
+    "id": "DEXCOM_ALL",
     "ticker": "DXCM",
+    "name": "All Dexcom (combined)",
     "latest_month": "2026-02",
     "reports": 19921,
     "z_score": -0.89,
     "rate": null,
-    "alert": false,
-    "updated": "2026-03-16T21:44:28.538196"
+    "rate_z": -1.65,
+    "divergence": 37.3,
+    "severity_pct": 1.3,
+    "alert": true,
+    "updated": "2026-03-16T21:58:40.142503"
   },
   {
-    "id": "TNDM",
+    "id": "TSLIM_X2",
     "ticker": "TNDM",
+    "name": "Tandem t:slim X2",
     "latest_month": "2026-02",
-    "reports": 3104,
-    "z_score": -0.97,
+    "reports": 15823,
+    "z_score": -0.57,
     "rate": null,
+    "rate_z": -0.36,
+    "divergence": 23.4,
+    "severity_pct": 9.3,
     "alert": true,
-    "updated": "2026-03-16T21:44:28.538200"
+    "updated": "2026-03-16T21:58:40.142506"
+  },
+  {
+    "id": "MOBI",
+    "ticker": "TNDM",
+    "name": "Tandem Mobi",
+    "latest_month": "2026-02",
+    "reports": 3098,
+    "z_score": -0.98,
+    "rate": null,
+    "rate_z": 0.9,
+    "divergence": 27.0,
+    "severity_pct": 15.8,
+    "alert": true,
+    "updated": "2026-03-16T21:58:40.142508"
   }
 ]
