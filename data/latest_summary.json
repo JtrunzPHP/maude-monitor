@@ -9,9 +9,9 @@
     "rate": null,
     "rate_z": 0.4,
     "divergence": 49.0,
-    "severity_pct": 10.1,
+    "severity_pct": 9.9,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433556"
+    "updated": "2026-03-20T14:33:09.374977"
   },
   {
     "id": "OMNIPOD_DASH",
@@ -25,7 +25,7 @@
     "divergence": 22.9,
     "severity_pct": 5.4,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433565"
+    "updated": "2026-03-20T14:33:09.374987"
   },
   {
     "id": "OMNIPOD_ALL",
@@ -37,9 +37,9 @@
     "rate": null,
     "rate_z": -0.47,
     "divergence": 45.2,
-    "severity_pct": 9.7,
+    "severity_pct": 9.6,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433568"
+    "updated": "2026-03-20T14:33:09.374990"
   },
   {
     "id": "DEXCOM_G7",
@@ -53,7 +53,7 @@
     "divergence": 44.6,
     "severity_pct": 1.1,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433570"
+    "updated": "2026-03-20T14:33:09.374992"
   },
   {
     "id": "DEXCOM_G6",
@@ -67,7 +67,7 @@
     "divergence": 15.9,
     "severity_pct": 1.8,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433572"
+    "updated": "2026-03-20T14:33:09.374994"
   },
   {
     "id": "DEXCOM_ALL",
@@ -81,7 +81,7 @@
     "divergence": 37.3,
     "severity_pct": 1.2,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433573"
+    "updated": "2026-03-20T14:33:09.374996"
   },
   {
     "id": "TSLIM_X2",
@@ -95,7 +95,7 @@
     "divergence": 23.4,
     "severity_pct": 9.4,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433575"
+    "updated": "2026-03-20T14:33:09.374997"
   },
   {
     "id": "MOBI",
@@ -107,8 +107,8 @@
     "rate": null,
     "rate_z": 0.9,
     "divergence": 26.9,
-    "severity_pct": 15.4,
+    "severity_pct": 15.5,
     "alert": true,
-    "updated": "2026-03-19T14:42:25.433577"
+    "updated": "2026-03-20T14:33:09.374999"
   }
 ]
