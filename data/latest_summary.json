@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-23T14:18:47.028509",
+  "generated": "2026-03-23T14:43:39.931305",
   "devices": [
     {
       "id": "DXCM_G7_15DAY",
@@ -18,7 +18,6 @@
       "signal": "NORMAL",
       "batch": false,
       "corr_rho": null,
-      "corr_p": null,
       "corr_sig": null
     },
     {
@@ -38,7 +37,6 @@
       "signal": "CRITICAL",
       "batch": true,
       "corr_rho": 0,
-      "corr_p": 1.0,
       "corr_sig": false
     },
     {
@@ -57,9 +55,8 @@
       "r_score": 12.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.3997,
-      "corr_p": 0.021179,
-      "corr_sig": true
+      "corr_rho": 0.3308,
+      "corr_sig": false
     },
     {
       "id": "DXCM_STELO",
@@ -78,7 +75,6 @@
       "signal": "NORMAL",
       "batch": false,
       "corr_rho": 0,
-      "corr_p": 1.0,
       "corr_sig": false
     },
     {
@@ -97,13 +93,12 @@
       "r_score": 12.0,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": -0.3355,
-      "corr_p": 0.048836,
-      "corr_sig": true
+      "corr_rho": -0.2929,
+      "corr_sig": false
     },
     {
       "id": "DXCM_ALL",
-      "name": "All Dexcom (combined)",
+      "name": "All Dexcom",
       "ticker": "DXCM",
       "company": "Dexcom",
       "month": "2026-02",
@@ -118,7 +113,6 @@
       "signal": "CRITICAL",
       "batch": true,
       "corr_rho": 0,
-      "corr_p": 1.0,
       "corr_sig": false
     },
     {
@@ -137,8 +131,7 @@
       "r_score": 5.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.7517,
-      "corr_p": 0.0,
+      "corr_rho": 0.705,
       "corr_sig": true
     },
     {
@@ -158,12 +151,11 @@
       "signal": "NORMAL",
       "batch": true,
       "corr_rho": 0,
-      "corr_p": 1.0,
       "corr_sig": false
     },
     {
       "id": "PODD_ALL",
-      "name": "All Omnipod (combined)",
+      "name": "All Omnipod",
       "ticker": "PODD",
       "company": "Insulet",
       "month": "2026-02",
@@ -177,13 +169,12 @@
       "r_score": 3.7,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.7273,
-      "corr_p": 2e-06,
+      "corr_rho": 0.6835,
       "corr_sig": true
     },
     {
       "id": "TNDM_TSLIM",
-      "name": "Tandem t:slim X2",
+      "name": "t:slim X2",
       "ticker": "TNDM",
       "company": "Tandem",
       "month": "2026-02",
@@ -198,7 +189,6 @@
       "signal": "NORMAL",
       "batch": false,
       "corr_rho": 0,
-      "corr_p": 1.0,
       "corr_sig": false
     },
     {
@@ -217,13 +207,12 @@
       "r_score": 6.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0,
-      "corr_p": 1.0,
+      "corr_rho": -0.3568,
       "corr_sig": false
     },
     {
       "id": "TNDM_ALL",
-      "name": "All Tandem (combined)",
+      "name": "All Tandem",
       "ticker": "TNDM",
       "company": "Tandem",
       "month": "2026-02",
@@ -237,13 +226,12 @@
       "r_score": 6.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0.3691,
-      "corr_p": 0.044729,
-      "corr_sig": true
+      "corr_rho": 0.3399,
+      "corr_sig": false
     },
     {
       "id": "ABT_LIBRE3",
-      "name": "FreeStyle Libre 3/3+",
+      "name": "Libre 3/3+",
       "ticker": "ABT_LIBRE",
       "company": "Abbott",
       "month": "2026-02",
@@ -258,12 +246,11 @@
       "signal": "CRITICAL",
       "batch": false,
       "corr_rho": 0,
-      "corr_p": 1.0,
       "corr_sig": false
     },
     {
       "id": "ABT_LIBRE2",
-      "name": "FreeStyle Libre 2",
+      "name": "Libre 2",
       "ticker": "ABT_LIBRE",
       "company": "Abbott",
       "month": "2026-02",
@@ -277,13 +264,12 @@
       "r_score": 3.0,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0.3433,
-      "corr_p": 0.063288,
+      "corr_rho": 0.3222,
       "corr_sig": false
     },
     {
       "id": "ABT_LIBRE_ALL",
-      "name": "All FreeStyle Libre",
+      "name": "All Libre",
       "ticker": "ABT_LIBRE",
       "company": "Abbott",
       "month": "2026-02",
@@ -297,13 +283,88 @@
       "r_score": 76.1,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0.3673,
-      "corr_p": 0.045858,
+      "corr_rho": 0.3563,
       "corr_sig": true
     },
     {
+      "id": "BBNX_ILET",
+      "name": "iLet Bionic Pancreas",
+      "ticker": "BBNX",
+      "company": "Beta Bionics",
+      "month": "2026-02",
+      "reports": 8100,
+      "z_score": 1.66,
+      "rate_per_m": 759.38,
+      "rate_per_10k": 1928.5714,
+      "slope_6m": 1420.66,
+      "deaths_3mo": 5,
+      "injuries_3mo": 3951,
+      "r_score": 91.1,
+      "signal": "CRITICAL",
+      "batch": true,
+      "corr_rho": 0,
+      "corr_sig": false
+    },
+    {
+      "id": "BBNX_ALL",
+      "name": "All Beta Bionics",
+      "ticker": "BBNX",
+      "company": "Beta Bionics",
+      "month": "2026-02",
+      "reports": 8100,
+      "z_score": 1.66,
+      "rate_per_m": 759.38,
+      "rate_per_10k": 1928.5714,
+      "slope_6m": 1420.66,
+      "deaths_3mo": 5,
+      "injuries_3mo": 3951,
+      "r_score": 91.1,
+      "signal": "CRITICAL",
+      "batch": true,
+      "corr_rho": 0,
+      "corr_sig": false
+    },
+    {
+      "id": "MDT_SIMPLERA",
+      "name": "Simplera Sync CGM",
+      "ticker": "MDT_DM",
+      "company": "Medtronic",
+      "month": "2026-02",
+      "reports": 323,
+      "z_score": 2.78,
+      "rate_per_m": 1.21,
+      "rate_per_10k": 3.7126,
+      "slope_6m": 24.11,
+      "deaths_3mo": 0,
+      "injuries_3mo": 16,
+      "r_score": 98.5,
+      "signal": "CRITICAL",
+      "batch": false,
+      "corr_rho": 0,
+      "corr_sig": false
+    },
+    {
+      "id": "MDT_DM_ALL",
+      "name": "All Medtronic Diabetes",
+      "ticker": "MDT_DM",
+      "company": "Medtronic",
+      "month": "2026-02",
+      "reports": 1,
+      "z_score": -0.69,
+      "rate_per_m": 0.0,
+      "rate_per_10k": 0.0115,
+      "slope_6m": 0.14,
+      "deaths_3mo": 0,
+      "injuries_3mo": 3,
+      "r_score": 70.2,
+      "signal": "CRITICAL",
+      "batch": false,
+      "corr_rho": null,
+      "corr_sig": null
+    },
+    {
       "id": "SQEL_TWIIST",
-      "name": "twiist AID System",
+      "name": "twiist AID",
       "ticker": "SQEL",
       "company": "Sequel Med Tech",
       "month": "2026-02",
@@ -318,7 +379,6 @@
       "signal": "CRITICAL",
       "batch": false,
       "corr_rho": null,
-      "corr_p": null,
       "corr_sig": null
     }
   ]
