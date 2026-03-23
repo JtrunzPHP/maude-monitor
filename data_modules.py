@@ -1,576 +1,430 @@
 """
-data_modules.py — Enhanced Data Collection Modules
-====================================================
-1. MAUDE Text NLP — failure-mode classification from mdr_text
-2. Reddit Sentiment — public .json endpoints for diabetes forums
-3. SEC EDGAR NLP — quality keyword scoring from 10-Q/10-K filings
-4. International MHRA — lightweight UK Yellow Card data (non-blocking)
+data_modules.py — All Enhanced Data Sources for MAUDE Monitor V3
+=================================================================
+1. MAUDE Text NLP (failure-mode classification)
+2. Google Trends (early complaint signal)
+3. SEC EDGAR Form 4 (insider trading)
+4. SEC EDGAR 10-Q/10-K NLP (quality language)
+5. ClinicalTrials.gov (competitive pipeline)
+6. Short Interest (market positioning)
+7. CMS Payer/Formulary (coverage tracking)
+8. International MHRA (UK signal)
 
-All modules are designed to fail gracefully — if a source is down,
-the pipeline continues with the data it has.
+Every function returns a dict with a "status" key so the dashboard
+ALWAYS shows whether data was fetched, blocked, or unavailable.
 """
-import json, time, re
-from datetime import datetime, timedelta
-from urllib.request import urlopen, Request
-from urllib.error import HTTPError, URLError
+import json,time,re,math
+from datetime import datetime,timedelta
+from urllib.request import urlopen,Request
+from urllib.parse import quote as url_quote
+from urllib.error import HTTPError,URLError
+
+def _fetch(url, timeout=15, ua="MAUDE-Monitor/3.0"):
+    try:
+        req=Request(url,headers={"User-Agent":ua,"Accept":"application/json"})
+        with urlopen(req,timeout=timeout) as r: return json.loads(r.read())
+    except Exception as e:
+        return {"_error":str(e)}
+
+def _fetch_text(url, timeout=15, ua="MAUDE-Monitor/3.0 research@example.com"):
+    try:
+        req=Request(url,headers={"User-Agent":ua})
+        with urlopen(req,timeout=timeout) as r: return r.read().decode("utf-8",errors="ignore")
+    except Exception as e:
+        return ""
 
 # ============================================================
-# 1. MAUDE TEXT NLP — FAILURE MODE CLASSIFICATION
+# 1. MAUDE TEXT NLP
 # ============================================================
-
-# Keyword dictionaries for failure-mode classification
-# Each category has primary keywords (high confidence) and secondary (lower confidence)
 FAILURE_MODES = {
-    "sensor_accuracy": {
-        "primary": ["inaccurate", "false reading", "wrong reading", "reading was off", "incorrect reading",
-                     "showed low when high", "showed high when low", "discrepancy", "not matching"],
-        "secondary": ["accuracy", "MARD", "finger stick", "fingerstick", "blood glucose meter",
-                       "calibration", "readings do not match"],
-        "description": "Sensor providing incorrect glucose values. High severity — can lead to wrong insulin dosing.",
-    },
-    "adhesive_skin": {
-        "primary": ["adhesive", "fell off", "peeling", "tape came off", "won't stick",
-                     "skin irritation", "rash", "allergic reaction", "dermatitis", "blistered"],
-        "secondary": ["adhesive patch", "skin", "irritation", "fell off early", "itching",
-                       "swelling", "redness around site"],
-        "description": "Adhesive failure or skin reaction. Lower severity but affects compliance.",
-    },
-    "connectivity": {
-        "primary": ["bluetooth", "lost connection", "no signal", "pairing failed", "won't connect",
-                     "communication error", "lost signal", "sync failed", "disconnected"],
-        "secondary": ["connection", "signal", "pairing", "sync", "phone", "app connection",
-                       "receiver connection"],
-        "description": "Bluetooth/wireless connectivity failures between sensor and receiver/phone.",
-    },
-    "alert_failure": {
-        "primary": ["no alert", "missed alert", "no alarm", "did not alert", "silent failure",
-                     "alarm did not sound", "no notification", "alert not received", "speaker"],
-        "secondary": ["notification", "vibration", "sound", "alarm", "alert",
-                       "hypoglycemia alert", "hyperglycemia alert", "urgent low"],
-        "description": "Device failed to alert user to dangerous glucose levels. HIGH severity — linked to deaths.",
-    },
-    "insulin_delivery": {
-        "primary": ["occlusion", "no delivery", "blockage", "under-delivery", "over-delivery",
-                     "insulin not delivered", "air bubble", "site leak", "pump failure"],
-        "secondary": ["delivery", "infusion", "bolus", "basal", "insulin delivery error",
-                       "pod failure", "cannula", "tubing"],
-        "description": "Insulin pump delivery failure. Very high severity — can cause DKA or severe hypo.",
-    },
-    "sensor_early_termination": {
-        "primary": ["sensor failed", "expired early", "terminated early", "sensor error",
-                     "warm-up failed", "no readings", "sensor stopped", "3 exclamation marks"],
-        "secondary": ["replace sensor", "sensor ended", "sensor lasted", "sensor life",
-                       "days instead of", "sensor only lasted"],
-        "description": "Sensor stopped working before its labeled wear period ended.",
-    },
-    "software_app": {
-        "primary": ["app crash", "software error", "app frozen", "display error", "screen blank",
-                     "update broke", "firmware", "app not working", "data lost"],
-        "secondary": ["software", "update", "app", "screen", "display", "glitch", "bug"],
-        "description": "Software/app malfunction in companion mobile app or device firmware.",
-    },
+    "sensor_accuracy":{"primary":["inaccurate","false reading","wrong reading","reading was off","incorrect reading","showed low when high","showed high when low"],"secondary":["accuracy","MARD","finger stick","calibration"],"desc":"Sensor giving wrong glucose values. Can cause wrong insulin dosing. HIGH severity.","recall_risk":0.8},
+    "adhesive_skin":{"primary":["adhesive","fell off","peeling","skin irritation","rash","allergic reaction","dermatitis","blistered"],"secondary":["tape","itching","swelling","redness"],"desc":"Adhesive failure or skin reaction. Affects compliance. MEDIUM severity.","recall_risk":0.2},
+    "connectivity":{"primary":["bluetooth","lost connection","no signal","pairing failed","communication error","disconnected"],"secondary":["sync","phone","app connection","receiver"],"desc":"Wireless connectivity failure between sensor and phone/receiver.","recall_risk":0.3},
+    "alert_failure":{"primary":["no alert","missed alert","no alarm","did not alert","silent failure","alarm did not sound","speaker"],"secondary":["notification","vibration","urgent low","alert not received"],"desc":"Failed to warn user of dangerous glucose. Linked to deaths. CRITICAL severity.","recall_risk":0.95},
+    "insulin_delivery":{"primary":["occlusion","no delivery","blockage","under-delivery","over-delivery","insulin not delivered","pump failure"],"secondary":["infusion","bolus","basal","cannula","tubing","pod failure"],"desc":"Pump delivery failure. Can cause DKA or severe hypo. VERY HIGH severity.","recall_risk":0.7},
+    "sensor_early_end":{"primary":["sensor failed","expired early","terminated early","sensor error","warm-up failed","no readings","sensor stopped"],"secondary":["replace sensor","sensor lasted","only lasted"],"desc":"Sensor stopped before labeled wear period ended.","recall_risk":0.4},
+    "software_app":{"primary":["app crash","software error","display error","screen blank","update broke","firmware"],"secondary":["software","update","app","glitch"],"desc":"App or firmware malfunction.","recall_risk":0.5},
 }
 
-def fetch_maude_texts(search_query, start="20250101", limit=100):
-    """
-    Fetch individual MAUDE report texts from openFDA.
-    Returns list of {month, event_type, text, mdr_key}.
-    
-    Note: This is rate-limited. Each call returns up to 100 records.
-    For production, batch across months.
-    """
-    end = datetime.now().strftime("%Y%m%d")
-    url = (f"https://api.fda.gov/device/event.json?"
-           f"search={_quote(search_query)}+AND+date_received:[{start}+TO+{end}]"
-           f"&limit={limit}")
-    
-    try:
-        req = Request(url, headers={"User-Agent": "MAUDE-Monitor/2.2"})
-        with urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-    except Exception as e:
-        print(f"  MAUDE text fetch failed: {e}")
-        return []
-    
-    records = []
-    for r in data.get("results", []):
-        texts = r.get("mdr_text", [])
-        combined_text = " ".join(t.get("text", "") for t in texts).lower()
-        date_recv = r.get("date_received", "")
-        month = f"{date_recv[:4]}-{date_recv[4:6]}" if len(date_recv) >= 6 else ""
-        event_type = r.get("event_type", "")
-        mdr_key = r.get("mdr_report_key", "")
-        
-        if combined_text and month:
-            records.append({
-                "month": month,
-                "event_type": event_type,
-                "text": combined_text[:2000],  # Truncate for memory
-                "mdr_key": mdr_key,
-            })
-    
-    return records
-
-def classify_failure_mode(text):
-    """
-    Classify a MAUDE report text into failure mode categories.
-    Returns dict of {category: confidence_score}.
-    Primary keyword match = 2 points, secondary = 1 point.
-    """
-    text_lower = text.lower()
-    scores = {}
-    
-    for category, config in FAILURE_MODES.items():
-        score = 0
-        for kw in config["primary"]:
-            if kw in text_lower:
-                score += 2
-        for kw in config["secondary"]:
-            if kw in text_lower:
-                score += 1
-        if score > 0:
-            scores[category] = score
-    
-    return scores
-
 def analyze_failure_modes(search_query, start="20250101", limit=100):
-    """
-    Fetch MAUDE texts and classify by failure mode.
-    Returns summary: {category: {count, pct, examples}}.
-    """
-    print(f"  Fetching MAUDE report texts for NLP...")
-    records = fetch_maude_texts(search_query, start, limit)
-    
+    end=datetime.now().strftime("%Y%m%d")
+    url=f"https://api.fda.gov/device/event.json?search={url_quote(search_query,safe='+:\"[]')}+AND+date_received:[{start}+TO+{end}]&limit={limit}"
+    data=_fetch(url)
+    if "_error" in data or "results" not in data:
+        return {"status":"error","message":data.get("_error","No results"),"total_analyzed":0,"modes":{}}
+    records=[]; total_with_text=0
+    for r in data.get("results",[]):
+        texts=r.get("mdr_text",[])
+        combined=" ".join(t.get("text","") for t in texts).lower().strip()
+        if combined: total_with_text+=1; records.append(combined[:2000])
     if not records:
-        return {"total_analyzed": 0, "modes": {}}
-    
-    mode_counts = {cat: {"count": 0, "examples": []} for cat in FAILURE_MODES}
-    unclassified = 0
-    
-    for rec in records:
-        scores = classify_failure_mode(rec["text"])
-        if not scores:
-            unclassified += 1
-            continue
-        # Assign to highest-scoring category
-        best_cat = max(scores, key=scores.get)
-        mode_counts[best_cat]["count"] += 1
-        if len(mode_counts[best_cat]["examples"]) < 2:
-            # Store a short excerpt as example
-            mode_counts[best_cat]["examples"].append(rec["text"][:150])
-    
-    total = len(records)
-    result = {"total_analyzed": total, "unclassified": unclassified, "modes": {}}
-    for cat, data in mode_counts.items():
-        if data["count"] > 0:
-            result["modes"][cat] = {
-                "count": data["count"],
-                "pct": round(data["count"] / total * 100, 1),
-                "label": cat.replace("_", " ").title(),
-                "description": FAILURE_MODES[cat]["description"],
-                "examples": data["examples"],
-            }
-    
+        return {"status":"no_text","message":f"Fetched {len(data.get('results',[]))} records but none had narrative text. This is common — many MAUDE records have blank mdr_text fields in the API.","total_analyzed":0,"modes":{}}
+    mode_counts={cat:{"count":0} for cat in FAILURE_MODES}
+    unclassified=0
+    for text in records:
+        scores={}
+        for cat,cfg in FAILURE_MODES.items():
+            s=sum(2 for kw in cfg["primary"] if kw in text)+sum(1 for kw in cfg["secondary"] if kw in text)
+            if s>0: scores[cat]=s
+        if not scores: unclassified+=1; continue
+        best=max(scores,key=scores.get); mode_counts[best]["count"]+=1
+    total=len(records)
+    result={"status":"ok","total_analyzed":total,"records_with_text":total_with_text,"unclassified":unclassified,"modes":{}}
+    for cat,d in mode_counts.items():
+        if d["count"]>0:
+            result["modes"][cat]={"count":d["count"],"pct":round(d["count"]/total*100,1),"label":cat.replace("_"," ").title(),"desc":FAILURE_MODES[cat]["desc"],"recall_risk":FAILURE_MODES[cat]["recall_risk"]}
     return result
 
 # ============================================================
-# 2. REDDIT SENTIMENT — PUBLIC .JSON ENDPOINTS
+# 2. GOOGLE TRENDS
 # ============================================================
-
-REDDIT_SUBREDDITS = ["diabetes", "diabetes_t1", "dexcom", "Omnipod"]
-REDDIT_SEARCH_TERMS = {
-    "DXCM": ["dexcom", "G7", "G6", "stelo", "CGM accuracy"],
-    "PODD": ["omnipod", "omnipod 5", "pod failure", "occlusion"],
-    "TNDM": ["tandem", "t:slim", "mobi", "control-iq"],
-    "ABT_LIBRE": ["libre", "freestyle libre", "libre 3"],
-    "SQEL": ["twiist", "sequel pump"],
+TRENDS_QUERIES = {
+    "DXCM":["dexcom g7 problems","dexcom recall","dexcom inaccurate","dexcom lawsuit"],
+    "PODD":["omnipod 5 problems","omnipod failure","omnipod occlusion"],
+    "TNDM":["tandem pump problems","tslim issues","control iq problems"],
+    "ABT_LIBRE":["libre 3 problems","freestyle libre inaccurate"],
+    "BBNX":["ilet problems","bionic pancreas issues"],
+    "MDT_DM":["minimed 780g problems","medtronic pump recall"],
+    "SQEL":["twiist pump problems"],
 }
 
-# Simple sentiment keywords (no external NLP library needed)
-POSITIVE_WORDS = {"love", "great", "amazing", "excellent", "perfect", "happy", "reliable",
-                  "accurate", "improved", "works well", "recommend", "best", "fantastic"}
-NEGATIVE_WORDS = {"terrible", "horrible", "worst", "hate", "broken", "failed", "inaccurate",
-                  "unreliable", "dangerous", "recall", "died", "death", "injury", "lawsuit",
-                  "malfunction", "defective", "error", "problem", "issue", "complaint",
-                  "frustrated", "angry", "scared", "worried", "disappointing"}
-
-def fetch_reddit_posts(subreddit, query, limit=25, time_filter="month"):
-    """Fetch posts from Reddit using public .json endpoint."""
-    url = (f"https://www.reddit.com/r/{subreddit}/search.json?"
-           f"q={_quote(query)}&restrict_sr=on&sort=new&t={time_filter}&limit={limit}")
-    
+def analyze_google_trends(ticker):
+    """Fetch Google Trends data. Uses pytrends if available, else reports unavailable."""
+    queries=TRENDS_QUERIES.get(ticker,[])
+    if not queries:
+        return {"status":"no_queries","message":"No trend queries configured for this ticker."}
     try:
-        req = Request(url, headers={
-            "User-Agent": "MAUDE-Monitor/2.2 (research; contact@example.com)",
-        })
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        
-        posts = []
-        for child in data.get("data", {}).get("children", []):
-            d = child.get("data", {})
-            posts.append({
-                "title": d.get("title", ""),
-                "selftext": d.get("selftext", "")[:500],
-                "score": d.get("score", 0),
-                "num_comments": d.get("num_comments", 0),
-                "created_utc": d.get("created_utc", 0),
-                "subreddit": subreddit,
-            })
-        return posts
+        from pytrends.request import TrendReq
+        pytrends=TrendReq(hl='en-US',tz=300)
+        # Get interest over last 12 months for top 2 queries
+        kw_list=queries[:2]
+        pytrends.build_payload(kw_list,cat=0,timeframe='today 12-m',geo='US')
+        interest=pytrends.interest_over_time()
+        if interest.empty:
+            return {"status":"no_data","message":"Google Trends returned no data for these queries."}
+        # Compute recent vs prior trend
+        recent=interest.tail(4).mean()  # last month
+        prior=interest.head(len(interest)-4).mean()  # everything before
+        trends=[]
+        for kw in kw_list:
+            r_val=recent.get(kw,0); p_val=prior.get(kw,0)
+            change=((r_val-p_val)/p_val*100) if p_val>0 else 0
+            trends.append({"query":kw,"recent_interest":round(float(r_val),1),"prior_interest":round(float(p_val),1),"change_pct":round(float(change),1)})
+        # Overall signal
+        avg_change=sum(t["change_pct"] for t in trends)/len(trends)
+        signal="rising" if avg_change>20 else "falling" if avg_change<-20 else "stable"
+        return {"status":"ok","trends":trends,"signal":signal,"avg_change":round(avg_change,1),"message":f"Complaint-related search interest is {signal} ({avg_change:+.0f}% vs prior period)."}
+    except ImportError:
+        return {"status":"no_pytrends","message":"pytrends not installed. Add 'pip install pytrends' to workflow. Google Trends provides the earliest signal (2-4 weeks ahead of MAUDE)."}
     except Exception as e:
-        print(f"  Reddit fetch failed for r/{subreddit} '{query}': {e}")
-        return []
-
-def score_sentiment(text):
-    """Simple keyword-based sentiment scoring. Returns float in [-1, 1]."""
-    text_lower = text.lower()
-    words = set(re.findall(r'\b\w+\b', text_lower))
-    
-    pos = len(words & POSITIVE_WORDS)
-    neg = len(words & NEGATIVE_WORDS)
-    total = pos + neg
-    
-    if total == 0:
-        return 0.0
-    return round((pos - neg) / total, 3)
-
-def analyze_reddit_sentiment(ticker):
-    """
-    Fetch and analyze Reddit sentiment for a ticker's products.
-    Returns {post_count, avg_sentiment, neg_pct, top_concerns, sample_posts}.
-    """
-    terms = REDDIT_SEARCH_TERMS.get(ticker, [])
-    if not terms:
-        return None
-    
-    all_posts = []
-    for sub in REDDIT_SUBREDDITS:
-        for term in terms[:2]:  # Limit to avoid rate limits
-            posts = fetch_reddit_posts(sub, term, limit=10, time_filter="month")
-            all_posts.extend(posts)
-            time.sleep(1.5)  # Rate limit: be nice to Reddit
-    
-    if not all_posts:
-        return {"post_count": 0, "avg_sentiment": 0, "error": "No posts retrieved"}
-    
-    # Deduplicate by title
-    seen = set()
-    unique = []
-    for p in all_posts:
-        if p["title"] not in seen:
-            seen.add(p["title"])
-            unique.append(p)
-    
-    sentiments = []
-    concerns = {}
-    for p in unique:
-        full_text = f"{p['title']} {p['selftext']}"
-        sent = score_sentiment(full_text)
-        sentiments.append(sent)
-        
-        # Identify concern categories
-        for word in NEGATIVE_WORDS:
-            if word in full_text.lower():
-                concerns[word] = concerns.get(word, 0) + 1
-    
-    avg_sent = sum(sentiments) / len(sentiments) if sentiments else 0
-    neg_count = sum(1 for s in sentiments if s < -0.1)
-    
-    top_concerns = sorted(concerns.items(), key=lambda x: -x[1])[:5]
-    
-    # Sample negative posts
-    neg_samples = sorted(
-        [(unique[i], sentiments[i]) for i in range(len(unique)) if sentiments[i] < -0.1],
-        key=lambda x: x[1]
-    )[:3]
-    
-    return {
-        "post_count": len(unique),
-        "avg_sentiment": round(avg_sent, 3),
-        "negative_pct": round(neg_count / len(unique) * 100, 1) if unique else 0,
-        "top_concerns": [{"word": w, "count": c} for w, c in top_concerns],
-        "sample_negative": [{"title": p["title"][:100], "score": p["score"], "sentiment": s}
-                           for p, s in neg_samples],
-        "period": "Last 30 days",
-    }
+        return {"status":"error","message":f"Google Trends blocked or errored: {str(e)[:100]}"}
 
 # ============================================================
-# 3. SEC EDGAR NLP — QUALITY KEYWORDS IN 10-Q/10-K FILINGS
+# 3. SEC FORM 4 INSIDER TRADING
 # ============================================================
+COMPANY_CIKS = {"DXCM":"0001093557","PODD":"0001145197","TNDM":"0001438133","ABT_LIBRE":"0000001800","BBNX":"0001674632","MDT_DM":"0001613103"}
 
-# CIK numbers for our companies (from SEC EDGAR)
-COMPANY_CIKS = {
-    "DXCM": "0001093557",
-    "PODD": "0001145197",
-    "TNDM": "0001438133",
-    "ABT_LIBRE": "0000001800",  # Abbott Labs
-}
+def analyze_insider_trading(ticker):
+    cik=COMPANY_CIKS.get(ticker)
+    if not cik: return {"status":"no_cik","message":"No CIK for this ticker."}
+    url=f"https://data.sec.gov/submissions/CIK{cik}.json"
+    data=_fetch(url,ua="MAUDE-Monitor research@parkmanhp.com")
+    if "_error" in data: return {"status":"error","message":f"EDGAR error: {data['_error'][:100]}"}
+    recent=data.get("filings",{}).get("recent",{})
+    forms=recent.get("form",[]); dates=recent.get("filingDate",[]); urls=recent.get("primaryDocument",[])
+    # Find Form 4s in last 90 days
+    cutoff=(datetime.now()-timedelta(days=90)).strftime("%Y-%m-%d")
+    form4s=[]
+    for i in range(min(len(forms),200)):
+        if forms[i]=="4" and dates[i]>=cutoff:
+            form4s.append({"date":dates[i],"form":forms[i]})
+    # Classify as buys vs sells (Form 4 detail requires parsing XML, so we approximate by count)
+    total=len(form4s)
+    if total==0:
+        return {"status":"ok","total_filings":0,"period":"90 days","message":"No Form 4 insider transactions in the last 90 days.","signal":"neutral"}
+    # High Form 4 activity often = selling
+    signal="high_activity" if total>10 else "moderate" if total>4 else "low"
+    msg=f"{total} Form 4 filings in last 90 days. "
+    if total>10: msg+="HIGH insider trading activity — often indicates selling. Cross-reference with R-Score."
+    elif total>4: msg+="Moderate insider activity."
+    else: msg+="Low insider activity — normal."
+    return {"status":"ok","total_filings":total,"period":"90 days","signal":signal,"message":msg,"filings":form4s[:5]}
 
-# Quality-related keywords to search for in filings
-# Grouped by severity/category
+# ============================================================
+# 4. SEC EDGAR 10-Q/10-K NLP
+# ============================================================
 EDGAR_KEYWORDS = {
-    "product_quality": {
-        "high": ["recall", "warning letter", "class I", "class II", "consent decree",
-                 "FDA inspection", "483 observation", "corrective action", "field safety"],
-        "medium": ["product quality", "manufacturing defect", "design defect", "adverse event",
-                   "complaint rate", "complaint volume", "product liability", "warranty",
-                   "warranty cost", "warranty expense", "replacement cost"],
-        "low": ["quality assurance", "quality control", "inspection", "regulatory compliance"],
-        "description": "Mentions of quality issues, recalls, FDA actions in filings.",
-    },
-    "legal_regulatory": {
-        "high": ["class action", "securities litigation", "derivative action",
-                 "DOJ investigation", "SEC investigation", "criminal"],
-        "medium": ["litigation", "lawsuit", "legal proceeding", "product liability claim",
-                   "regulatory proceeding", "government investigation"],
-        "low": ["patent", "intellectual property"],
-        "description": "Legal and regulatory risk language.",
-    },
-    "revenue_risk": {
-        "high": ["revenue decline", "market share loss", "customer attrition",
-                 "competitive pressure", "pricing pressure"],
-        "medium": ["guidance reduction", "lowered guidance", "headwind", "uncertainty",
-                   "challenging environment", "adverse impact"],
-        "low": ["competition", "competitive", "market dynamics"],
-        "description": "Language suggesting revenue or competitive risk.",
-    },
+    "product_quality":{"high":["recall","warning letter","class i","class ii","consent decree","fda inspection","483 observation","corrective action"],"medium":["product quality","manufacturing defect","adverse event","complaint rate","warranty cost","warranty expense","replacement cost"]},
+    "legal_risk":{"high":["class action","securities litigation","derivative action","doj investigation"],"medium":["litigation","lawsuit","legal proceeding","product liability"]},
+    "revenue_risk":{"high":["revenue decline","market share loss","customer attrition","competitive pressure"],"medium":["guidance reduction","lowered guidance","headwind","adverse impact"]},
 }
-
-def fetch_edgar_filings(cik, form_type="10-Q", count=4):
-    """
-    Fetch recent filing metadata from SEC EDGAR submissions API.
-    Returns list of {accession, date, form_type, url}.
-    Free, no API key required. Respects SEC rate limit (10 req/sec).
-    """
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    try:
-        req = Request(url, headers={
-            "User-Agent": "MAUDE-Monitor research@parkmanhp.com",  # SEC requires email
-            "Accept": "application/json",
-        })
-        with urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        
-        recent = data.get("filings", {}).get("recent", {})
-        forms = recent.get("form", [])
-        dates = recent.get("filingDate", [])
-        accessions = recent.get("accessionNumber", [])
-        primary_docs = recent.get("primaryDocument", [])
-        
-        results = []
-        for i in range(len(forms)):
-            if forms[i] == form_type and len(results) < count:
-                acc_no = accessions[i].replace("-", "")
-                doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no}/{primary_docs[i]}"
-                results.append({
-                    "accession": accessions[i],
-                    "date": dates[i],
-                    "form": forms[i],
-                    "url": doc_url,
-                })
-        return results
-    except Exception as e:
-        print(f"  EDGAR filing fetch failed for CIK {cik}: {e}")
-        return []
-
-def fetch_filing_text(url, max_chars=50000):
-    """Fetch filing HTML and extract text content."""
-    try:
-        req = Request(url, headers={
-            "User-Agent": "MAUDE-Monitor research@parkmanhp.com",
-        })
-        with urlopen(req, timeout=20) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-        
-        # Strip HTML tags (simple regex — not perfect but sufficient)
-        text = re.sub(r'<[^>]+>', ' ', html)
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'&nbsp;', ' ', text)
-        text = re.sub(r'&amp;', '&', text)
-        return text[:max_chars].lower()
-    except Exception as e:
-        print(f"  Filing text fetch failed: {e}")
-        return ""
-
-def score_filing_quality(text):
-    """
-    Score a filing's text for quality-related language.
-    Returns {category: {score, high_matches, medium_matches, low_matches}}.
-    """
-    results = {}
-    for category, config in EDGAR_KEYWORDS.items():
-        high_hits = [kw for kw in config["high"] if kw.lower() in text]
-        med_hits = [kw for kw in config["medium"] if kw.lower() in text]
-        low_hits = [kw for kw in config["low"] if kw.lower() in text]
-        
-        # Weighted score: high=5, medium=2, low=1
-        score = len(high_hits) * 5 + len(med_hits) * 2 + len(low_hits) * 1
-        
-        results[category] = {
-            "score": score,
-            "high_matches": high_hits,
-            "medium_matches": med_hits,
-            "low_matches": low_hits,
-            "description": config["description"],
-        }
-    
-    return results
 
 def analyze_edgar_filings(ticker):
-    """
-    Analyze recent 10-Q and 10-K filings for quality language.
-    Returns {filings: [{date, form, quality_score, matches}], trend}.
-    """
-    cik = COMPANY_CIKS.get(ticker)
-    if not cik:
-        return None
-    
-    print(f"  Fetching EDGAR filings for {ticker} (CIK {cik})...")
-    filings_10q = fetch_edgar_filings(cik, "10-Q", 4)
-    filings_10k = fetch_edgar_filings(cik, "10-K", 1)
-    all_filings = filings_10q + filings_10k
-    time.sleep(0.5)  # Rate limit
-    
-    if not all_filings:
-        return {"filings": [], "error": "No filings retrieved"}
-    
-    results = []
-    for f in all_filings[:4]:  # Limit to 4 most recent
-        print(f"    Analyzing {f['form']} filed {f['date']}...")
-        text = fetch_filing_text(f["url"])
+    cik=COMPANY_CIKS.get(ticker)
+    if not cik: return {"status":"no_cik","message":"No CIK."}
+    url=f"https://data.sec.gov/submissions/CIK{cik}.json"
+    data=_fetch(url,ua="MAUDE-Monitor research@parkmanhp.com")
+    if "_error" in data: return {"status":"error","message":f"EDGAR: {data['_error'][:100]}"}
+    recent=data.get("filings",{}).get("recent",{})
+    forms=recent.get("form",[]); dates=recent.get("filingDate",[]); accessions=recent.get("accessionNumber",[]); docs=recent.get("primaryDocument",[])
+    filings=[]
+    for i in range(min(len(forms),100)):
+        if forms[i] in ("10-Q","10-K") and len(filings)<3:
+            acc=accessions[i].replace("-","")
+            furl=f"https://www.sec.gov/Archives/edgar/data/{cik.lstrip('0')}/{acc}/{docs[i]}"
+            filings.append({"date":dates[i],"form":forms[i],"url":furl})
+    if not filings: return {"status":"no_filings","message":"No 10-Q/10-K found."}
+    results=[]
+    for f in filings:
         time.sleep(0.3)
-        
-        if not text:
-            continue
-        
-        scores = score_filing_quality(text)
-        total_score = sum(s["score"] for s in scores.values())
-        
-        # Collect all high-severity matches
-        high_matches = []
-        for cat, s in scores.items():
-            high_matches.extend(s["high_matches"])
-        
-        results.append({
-            "date": f["date"],
-            "form": f["form"],
-            "total_score": total_score,
-            "high_severity_matches": high_matches,
-            "categories": {cat: s["score"] for cat, s in scores.items()},
-        })
-    
-    # Trend: is quality language increasing?
-    if len(results) >= 2:
-        recent = results[0]["total_score"]
-        older = sum(r["total_score"] for r in results[1:]) / len(results[1:])
-        trend = "increasing" if recent > older * 1.2 else "decreasing" if recent < older * 0.8 else "stable"
-    else:
-        trend = "insufficient data"
-    
-    return {
-        "filings": results,
-        "trend": trend,
-        "interpretation": _edgar_interpretation(results, trend, ticker),
-    }
-
-def _edgar_interpretation(results, trend, ticker):
-    """Generate plain-English interpretation of EDGAR analysis."""
-    if not results:
-        return "No filings analyzed."
-    
-    latest = results[0]
-    high = latest.get("high_severity_matches", [])
-    
-    parts = [f"Most recent {latest['form']} (filed {latest['date']}): quality language score {latest['total_score']}."]
-    
-    if high:
-        parts.append(f"HIGH-SEVERITY matches: {', '.join(high)}.")
-    
-    if trend == "increasing":
-        parts.append("Quality/risk language is INCREASING in recent filings — management may be preparing the market for bad news.")
-    elif trend == "decreasing":
-        parts.append("Quality/risk language is decreasing — may indicate improving conditions or less disclosure.")
-    else:
-        parts.append("Quality language volume is stable across recent filings.")
-    
-    return " ".join(parts)
+        text=_fetch_text(f["url"],ua="MAUDE-Monitor research@parkmanhp.com")
+        if not text: continue
+        text_lower=re.sub(r'<[^>]+>',' ',text).lower()[:80000]
+        scores={}; all_high=[]
+        for cat,kws in EDGAR_KEYWORDS.items():
+            h=[kw for kw in kws["high"] if kw in text_lower]; m=[kw for kw in kws["medium"] if kw in text_lower]
+            scores[cat]=len(h)*5+len(m)*2; all_high.extend(h)
+        total_score=sum(scores.values())
+        results.append({"date":f["date"],"form":f["form"],"score":total_score,"high_matches":list(set(all_high)),"categories":scores})
+    if not results: return {"status":"error","message":"Could not parse filing text."}
+    trend="increasing" if len(results)>=2 and results[0]["score"]>results[-1]["score"]*1.2 else "decreasing" if len(results)>=2 and results[0]["score"]<results[-1]["score"]*0.8 else "stable"
+    latest=results[0]
+    msg=f'{latest["form"]} ({latest["date"]}): quality score {latest["score"]}.'
+    if latest["high_matches"]: msg+=f' HIGH matches: {", ".join(latest["high_matches"][:5])}.'
+    msg+=f" Trend: {trend}."
+    return {"status":"ok","filings":results,"trend":trend,"message":msg}
 
 # ============================================================
-# 4. INTERNATIONAL — MHRA YELLOW CARD (UK)
+# 5. CLINICALTRIALS.GOV
 # ============================================================
+TRIAL_QUERIES = {
+    "DXCM":"continuous glucose monitor dexcom","PODD":"omnipod insulin pump","TNDM":"tandem insulin pump",
+    "ABT_LIBRE":"freestyle libre","BBNX":"bionic pancreas ilet","MDT_DM":"minimed insulin pump","SQEL":"twiist insulin",
+}
 
-def fetch_mhra_data(brand_name, limit=10):
-    """
-    Attempt to fetch UK MHRA Yellow Card reports.
-    MHRA doesn't have a clean public API, so we search their
-    public Drug Analysis Prints and Medical Device reports.
-    This is best-effort — returns None if unavailable.
-    """
-    # MHRA public search endpoint
-    url = (f"https://info.mhra.gov.uk/drug-analysis-profiles/dap.aspx?"
-           f"drug={_quote(brand_name)}&format=json")
-    
-    try:
-        req = Request(url, headers={"User-Agent": "MAUDE-Monitor/2.2"})
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        return data
-    except Exception:
-        # MHRA endpoint may not return JSON — try alternative
-        pass
-    
-    # Alternative: search MHRA medical device alerts
-    alt_url = (f"https://www.gov.uk/drug-device-alerts.json?"
-               f"filter%5Bmedical_specialism%5D=diabetes")
-    try:
-        req = Request(alt_url, headers={"User-Agent": "MAUDE-Monitor/2.2"})
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        
-        alerts = []
-        for r in data.get("results", [])[:limit]:
-            title = r.get("title", "")
-            if brand_name.lower() in title.lower():
-                alerts.append({
-                    "title": title,
-                    "date": r.get("public_timestamp", ""),
-                    "url": f"https://www.gov.uk{r.get('link', '')}",
-                })
-        return {"alerts": alerts, "source": "MHRA/GOV.UK"} if alerts else None
-    except Exception as e:
-        print(f"  MHRA fetch failed for {brand_name}: {e}")
-        return None
+def analyze_clinical_trials(ticker):
+    query=TRIAL_QUERIES.get(ticker)
+    if not query: return {"status":"no_query","message":"No trial query configured."}
+    url=f"https://clinicaltrials.gov/api/v2/studies?query.term={url_quote(query)}&filter.overallStatus=RECRUITING,NOT_YET_RECRUITING,ACTIVE_NOT_RECRUITING&pageSize=5&sort=LastUpdatePostDate:desc"
+    data=_fetch(url)
+    if "_error" in data: return {"status":"error","message":f"ClinicalTrials.gov: {data['_error'][:100]}"}
+    studies=data.get("studies",[])
+    if not studies: return {"status":"no_trials","message":"No active/recruiting trials found."}
+    trials=[]
+    for s in studies[:5]:
+        proto=s.get("protocolSection",{})
+        ident=proto.get("identificationModule",{})
+        status=proto.get("statusModule",{})
+        trials.append({"nct_id":ident.get("nctId",""),"title":ident.get("briefTitle","")[:120],"status":status.get("overallStatus",""),"last_update":status.get("lastUpdatePostDateStruct",{}).get("date","")})
+    return {"status":"ok","count":len(trials),"trials":trials,"message":f"{len(trials)} active/recruiting trials found. New trials = competitive pipeline activity."}
 
+# ============================================================
+# 6. SHORT INTEREST (Yahoo Finance key stats page)
+# ============================================================
+YAHOO_TICKERS = {"DXCM":"DXCM","PODD":"PODD","TNDM":"TNDM","ABT_LIBRE":"ABT","BBNX":"BBNX","MDT_DM":"MDT"}
+
+def analyze_short_interest(ticker):
+    yt=YAHOO_TICKERS.get(ticker)
+    if not yt: return {"status":"no_ticker","message":"No Yahoo ticker."}
+    url=f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{yt}?modules=defaultKeyStatistics"
+    data=_fetch(url,ua="Mozilla/5.0")
+    if "_error" in data:
+        return {"status":"blocked","message":"Yahoo Finance blocked this request. Short interest data unavailable from this IP."}
+    try:
+        stats=data["quoteSummary"]["result"][0]["defaultKeyStatistics"]
+        si_pct=stats.get("shortPercentOfFloat",{}).get("raw",None)
+        si_shares=stats.get("sharesShort",{}).get("raw",None)
+        si_ratio=stats.get("shortRatio",{}).get("raw",None)
+        if si_pct is None: return {"status":"no_data","message":"Short interest data not available."}
+        signal="high" if si_pct>0.10 else "moderate" if si_pct>0.05 else "low"
+        msg=f"Short interest: {si_pct*100:.1f}% of float ({si_shares:,.0f} shares). Days to cover: {si_ratio:.1f}. "
+        if si_pct>0.10: msg+="HIGH short interest — market is bearish. If R-Score also elevated, consensus building."
+        elif si_pct>0.05: msg+="Moderate — some skepticism but not crowded."
+        else: msg+="Low — market not positioned for downside."
+        return {"status":"ok","short_pct":round(si_pct*100,2),"short_shares":si_shares,"days_to_cover":round(si_ratio,1),"signal":signal,"message":msg}
+    except: return {"status":"parse_error","message":"Could not parse Yahoo Finance response."}
+
+# ============================================================
+# 7. CMS PAYER/FORMULARY TRACKING
+# ============================================================
+def analyze_payer_coverage(ticker):
+    """Check CMS.gov for recent coverage decisions related to CGM/insulin pumps."""
+    # CMS doesn't have a clean API for this. We search their decision memo page.
+    queries={"DXCM":"continuous glucose monitor","PODD":"insulin pump","TNDM":"insulin pump","ABT_LIBRE":"continuous glucose monitor","BBNX":"insulin pump","MDT_DM":"insulin pump"}
+    q=queries.get(ticker)
+    if not q: return {"status":"no_query","message":"No CMS query configured."}
+    url=f"https://www.cms.gov/medicare-coverage-database/search.aspx?searchTerm={url_quote(q)}&format=json"
+    # CMS site doesn't return JSON reliably, so this is framework-level
+    return {"status":"framework","message":"CMS coverage tracking is a framework placeholder. CMS does not provide a structured API for coverage decisions. For CGMs, the key coverage expansion was the April 2023 Medicare ruling allowing CGM coverage without insulin use. Monitor cms.gov/medicare-coverage-database manually for changes."}
+
+# ============================================================
+# 8. INTERNATIONAL (MHRA/UK)
+# ============================================================
 def analyze_international(ticker, brand_names):
-    """
-    Collect international adverse event data where available.
-    Currently supports: UK MHRA (best-effort).
-    Returns dict or None.
-    """
-    results = {}
-    
-    for brand in brand_names:
-        print(f"  Checking MHRA for '{brand}'...")
-        mhra = fetch_mhra_data(brand)
-        if mhra:
-            results[brand] = {"mhra": mhra}
-        time.sleep(0.5)
-    
+    results={}
+    for brand in brand_names[:2]:
+        url=f"https://www.gov.uk/drug-device-alerts.json?keywords={url_quote(brand)}"
+        data=_fetch(url)
+        if "_error" not in data:
+            alerts=[]
+            for r in data.get("results",[])[:3]:
+                if brand.lower() in r.get("title","").lower():
+                    alerts.append({"title":r.get("title","")[:120],"date":r.get("public_timestamp","")[:10]})
+            if alerts: results[brand]=alerts
     if not results:
-        return None
-    
-    return {
-        "source": "UK MHRA Yellow Card / GOV.UK Medical Device Alerts",
-        "disclaimer": "International data coverage is limited. MHRA does not provide a structured public API. Results are best-effort.",
-        "results": results,
-    }
+        return {"status":"no_alerts","message":"No UK MHRA alerts found for this company's products. International signal is limited — MHRA does not have a structured API."}
+    return {"status":"ok","alerts":results,"message":f"Found MHRA alerts for: {', '.join(results.keys())}"}
 
 # ============================================================
-# UTILITY
+# 9. RECALL PROBABILITY MODEL
 # ============================================================
+def compute_recall_probability(failure_modes_data, stats_list):
+    """Estimate probability of a future recall based on failure mode mix and trends."""
+    if not failure_modes_data or failure_modes_data.get("status")!="ok" or not failure_modes_data.get("modes"):
+        if not stats_list or len(stats_list)<6:
+            return {"status":"insufficient_data","message":"Need failure mode data and 6+ months of stats.","probability":None}
+        # Fallback: use severity trend alone
+        recent_sev=sum(s["severity_score"] for s in stats_list[-3:])/3
+        prior_sev=sum(s["severity_score"] for s in stats_list[-6:-3])/3
+        ratio=recent_sev/prior_sev if prior_sev>0 else 1
+        prob=min(0.8,max(0.05,0.1+(ratio-1)*0.3))
+        return {"status":"severity_only","probability":round(prob,2),"message":f"Based on severity trend only (ratio {ratio:.2f}). {prob*100:.0f}% estimated recall probability in next 6 months."}
+    # Weight by recall_risk of dominant failure modes
+    modes=failure_modes_data["modes"]
+    weighted_risk=0; total_pct=0
+    for cat,info in modes.items():
+        risk=FAILURE_MODES.get(cat,{}).get("recall_risk",0.3)
+        weighted_risk+=info["pct"]*risk; total_pct+=info["pct"]
+    if total_pct>0: weighted_risk/=total_pct
+    # Adjust by trend
+    if stats_list and len(stats_list)>=6:
+        recent=sum(s["count"] for s in stats_list[-3:])/3
+        prior=sum(s["count"] for s in stats_list[-6:-3])/3
+        trend_mult=min(2,recent/prior) if prior>0 else 1
+        weighted_risk*=trend_mult
+    prob=min(0.95,max(0.05,weighted_risk))
+    dominant=max(modes.items(),key=lambda x:x[1]["pct"])[0] if modes else "unknown"
+    signal="HIGH" if prob>0.5 else "MODERATE" if prob>0.25 else "LOW"
+    return {"status":"ok","probability":round(prob,2),"signal":signal,"dominant_mode":dominant.replace("_"," ").title(),"message":f"{prob*100:.0f}% estimated recall probability (next 6mo). Dominant failure mode: {dominant.replace('_',' ')}. Signal: {signal}."}
 
-def _quote(s):
-    """URL-encode a string, preserving openFDA operators."""
-    from urllib.parse import quote
-    return quote(s, safe='+:"[]')
+# ============================================================
+# 10. PEER-RELATIVE SCORING
+# ============================================================
+def compute_peer_relative(all_r_scores):
+    """Compare each company's R-Score to the peer group average."""
+    scores={k:v for k,v in all_r_scores.items() if v is not None}
+    if len(scores)<2: return {}
+    avg=sum(scores.values())/len(scores)
+    sd=(sum((v-avg)**2 for v in scores.values())/len(scores))**.5
+    result={}
+    for k,v in scores.items():
+        diff=v-avg
+        z_vs_peers=diff/sd if sd>0 else 0
+        signal="WORST" if z_vs_peers>1 else "WEAK" if z_vs_peers>0.5 else "BEST" if z_vs_peers<-1 else "STRONG" if z_vs_peers<-0.5 else "INLINE"
+        result[k]={"r_score":v,"peer_avg":round(avg,1),"diff":round(diff,1),"z_vs_peers":round(z_vs_peers,2),"signal":signal,"message":f"R-Score {v:.0f} vs peer avg {avg:.0f} ({diff:+.0f}). {signal} relative to peer group."}
+    return result
+
+# ============================================================
+# 11. EARNINGS SURPRISE PREDICTOR
+# ============================================================
+def predict_earnings_surprise(stats_list, r_score, peer_relative):
+    """Predict beat/miss probability based on MAUDE signals."""
+    if not stats_list or len(stats_list)<6 or not r_score:
+        return {"status":"insufficient_data","message":"Need 6+ months of data and R-Score."}
+    # Factors that predict a miss:
+    miss_score=0
+    # 1. High R-Score
+    if r_score["total"]>=50: miss_score+=3
+    elif r_score["total"]>=30: miss_score+=1
+    # 2. Rising Rate/$M (quality getting worse relative to revenue)
+    recent_rpm=[s["rate_per_m"] for s in stats_list[-3:] if s["rate_per_m"]]
+    prior_rpm=[s["rate_per_m"] for s in stats_list[-6:-3] if s["rate_per_m"]]
+    if recent_rpm and prior_rpm:
+        rpm_change=(sum(recent_rpm)/len(recent_rpm))/(sum(prior_rpm)/len(prior_rpm))
+        if rpm_change>1.2: miss_score+=2
+        elif rpm_change>1.05: miss_score+=1
+    # 3. Positive slope (accelerating problems)
+    if stats_list[-1]["slope_6m"]>0: miss_score+=1
+    # 4. Peer-relative weakness
+    if peer_relative and peer_relative.get("signal") in ("WORST","WEAK"): miss_score+=1
+    # 5. Deaths in recent period
+    recent_deaths=sum(s["deaths"] for s in stats_list[-3:])
+    if recent_deaths>0: miss_score+=2
+    # Convert to probability
+    max_score=9
+    miss_prob=min(0.85,miss_score/max_score)
+    beat_prob=1-miss_prob
+    if miss_prob>0.55: prediction="LIKELY MISS"
+    elif beat_prob>0.55: prediction="LIKELY BEAT"
+    else: prediction="TOSS-UP"
+    return {"status":"ok","miss_probability":round(miss_prob,2),"beat_probability":round(beat_prob,2),"prediction":prediction,"miss_score":miss_score,"max_score":max_score,"message":f"Earnings prediction: {prediction}. Miss probability: {miss_prob*100:.0f}%. Based on R-Score ({r_score['total']:.0f}), quality trend, severity, and peer position."}
+
+# ============================================================
+# BACKTEST ENGINE
+# ============================================================
+def backtest_r_score(stats_list, stock_monthly, threshold=50, forward_days_list=[30,60,90]):
+    """
+    Backtest: when R-Score crossed threshold, what happened to stock?
+    Returns hit rates, avg returns, and individual trades.
+    """
+    if not stats_list or len(stats_list)<12 or not stock_monthly:
+        return {"status":"insufficient_data","message":"Need 12+ months of MAUDE data and stock prices."}
+    # Compute R-Scores for each month
+    monthly_r={}
+    for i in range(6,len(stats_list)):
+        window=stats_list[:i+1]
+        r=_quick_r_score(window)
+        if r is not None: monthly_r[stats_list[i]["month"]]=r
+    # Find signal months (R-Score crosses threshold)
+    sorted_months=sorted(stock_monthly.keys())
+    signals=[]
+    prev_below=True
+    for m in sorted(monthly_r.keys()):
+        above=monthly_r[m]>=threshold
+        if above and prev_below:  # Crossed upward
+            signals.append(m)
+        prev_below=not above
+    if not signals:
+        return {"status":"no_signals","message":f"R-Score never crossed {threshold} in this period. Try a lower threshold.","trades":[]}
+    # For each signal, compute forward returns
+    trades=[]
+    for sig_month in signals:
+        sig_idx=sorted_months.index(sig_month) if sig_month in sorted_months else -1
+        if sig_idx<0: continue
+        entry_price=stock_monthly.get(sig_month)
+        if not entry_price: continue
+        trade={"signal_month":sig_month,"entry_price":entry_price,"r_score":monthly_r[sig_month],"returns":{}}
+        for fwd in forward_days_list:
+            fwd_months=fwd//30
+            target_idx=sig_idx+fwd_months
+            if target_idx<len(sorted_months):
+                exit_price=stock_monthly.get(sorted_months[target_idx])
+                if exit_price: trade["returns"][f"{fwd}d"]=round((exit_price-entry_price)/entry_price*100,2)
+        trades.append(trade)
+    # Aggregate stats
+    results={}
+    for fwd in forward_days_list:
+        key=f"{fwd}d"
+        rets=[t["returns"].get(key) for t in trades if key in t["returns"]]
+        if not rets: continue
+        wins=sum(1 for r in rets if r<0)  # We're looking for stock DECLINES after high R-Score
+        results[key]={"n":len(rets),"win_rate":round(wins/len(rets)*100,1),"avg_return":round(sum(rets)/len(rets),2),"best":round(min(rets),2),"worst":round(max(rets),2)}
+    if not results:
+        return {"status":"no_forward_data","message":"Signal months found but no forward stock data available.","trades":trades}
+    best_window=min(results.keys(),key=lambda k:results[k]["avg_return"])
+    bw=results[best_window]
+    msg=f"Backtest: R-Score crossed {threshold} on {len(signals)} occasions. "
+    msg+=f"Best window: {best_window} — stock declined {abs(bw['avg_return']):.1f}% avg (win rate: {bw['win_rate']:.0f}%, n={bw['n']})."
+    return {"status":"ok","threshold":threshold,"signals":len(signals),"results":results,"trades":trades,"message":msg}
+
+def _quick_r_score(sl):
+    if len(sl)<6: return None
+    lt=sl[-1]; zc=min(20,abs(lt["z_score"])*6.67)
+    rs=sum(s["severity_score"] for s in sl[-3:])/3; ps=sum(s["severity_score"] for s in sl[-6:-3])/3
+    sc=min(20,max(0,(rs/ps-1)*40)) if ps>0 else 10
+    rr=[s["rate_per_m"] for s in sl[-3:] if s["rate_per_m"]]; pr=[s["rate_per_m"] for s in sl[-6:-3] if s["rate_per_m"]]
+    gc=min(20,max(0,((sum(rr)/len(rr))/(sum(pr)/len(pr))-1)*80)) if rr and pr and sum(pr)/len(pr)>0 else 10
+    sp=lt["slope_6m"]/lt["avg_12m"]*100 if lt["avg_12m"]>0 else 0; slc=min(20,max(0,sp*2))
+    ri=[s["rate_per_10k"] for s in sl[-3:] if s["rate_per_10k"]]; pi=[s["rate_per_10k"] for s in sl[-6:-3] if s["rate_per_10k"]]
+    ic=min(20,max(0,((sum(ri)/len(ri))/(sum(pi)/len(pi))-1)*80)) if ri and pi and sum(pi)/len(pi)>0 else 10
+    return min(100,zc+sc+gc+slc+ic)
