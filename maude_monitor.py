@@ -11,10 +11,10 @@ from urllib.error import HTTPError,URLError
 try:
     from stats_engine import compute_enhanced_correlation, _self_test as stats_selftest
     from data_modules import (
-        analyze_failure_modes, analyze_edgar_filings, analyze_international,
-        analyze_google_trends, analyze_insider_trading, analyze_clinical_trials,
-        analyze_short_interest, analyze_payer_coverage, compute_recall_probability,
-        compute_peer_relative, predict_earnings_surprise, backtest_r_score
+        analyze_failure_modes, analyze_edgar_filings,
+        analyze_insider_trading, analyze_clinical_trials,
+        compute_recall_probability, compute_peer_relative,
+        predict_earnings_surprise, backtest_r_score
     )
     HAS_MODULES = True
 except ImportError as e:
@@ -420,7 +420,7 @@ def generate_html(all_res,summary):
 <div class="si"><div class="sil">INJURIES (3MO)</div><div class="siv">{i3}</div></div>
 <div class="si"><div class="sil">SEVERITY</div><div class="siv">{fmt0(lt["severity_score"])}</div><div class="sis">D x10 I x3 M x1</div></div></div>
 {rhtml}
-{fmhtml}{rphtml}{gthtml}{inshtml}{cthtml}{sihtml}{edhtml}{prhtml}{ephtml}{bthtml}{payhtml}{echtml}{intlhtml}
+{fmhtml}{rphtml}{inshtml}{cthtml}{edhtml}{prhtml}{ephtml}{bthtml}{echtml}
 <div class="cc" id="cc-{did}"><button class="cb active" data-v="reports">Reports</button><button class="cb" data-v="rate_m">Rate/$M</button><button class="cb" data-v="rate_10k">Rate/10K</button><button class="cb" data-v="severity">Severity</button><button class="cb" data-v="zscore">Z-Score</button><button class="cb" data-v="stock">Stock</button><button class="cb rst" data-v="reset">Reset</button></div>
 <div class="cdesc" id="cdesc-{did}">Select a chart view above. Each tab shows a different analytical lens with context.</div>
 <div class="cw"><canvas id="ch-{did}"></canvas></div></div>\n'''
