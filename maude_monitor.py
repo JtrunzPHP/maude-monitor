@@ -607,38 +607,43 @@ td{{padding:9px 12px;border-bottom:1px solid var(--bd);font-size:13px;white-spac
 <div class="grid">{cards}</div>
 <div class="disc"><strong>Disclaimer:</strong> For research purposes only — not investment advice. MAUDE is passive surveillance with known limitations. Correlation ≠ causation. Revenue from SEC filings; installed base from earnings calls; stock prices from Yahoo Finance (monthly closes, may have slight variations). Reddit sentiment uses keyword matching, not ML. SEC filing NLP is keyword-based. Sequel Med Tech is private. Always conduct independent due diligence.</div></div>
 <script>
-const CD={json.dumps(cd)};const DC={json.dumps({d["id"]:d["company"] for d in DEVICES})};const charts={{}};
-function init(){{for(const[d,data]of Object.entries(CD))mk(d,data,"reports");
-document.querySelectorAll(".cc").forEach(cc=>{{cc.querySelectorAll(".cb").forEach(b=>{{b.addEventListener("click",function(){{
-const did=cc.id.replace("cc-",""),v=this.dataset.v;
-if(v==="reset"){{if(charts[did])charts[did].resetZoom();return}}
-cc.querySelectorAll(".cb:not(.rst)").forEach(x=>x.classList.remove("active"));this.classList.add("active");mk(did,CD[did],v)}})}})}})}
-function mk(did,D,v){{const ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();
-let ds=[],yL="";const bm=D.bm||[],evts=D.evts||[],evtMs=evts.map(e=>e.date);
-if(v==="reports"){{ds=[
-{{label:"2σ upper",data:D.u2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:"+1",pointRadius:0,order:5}},
-{{label:"2σ lower",data:D.l2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:false,pointRadius:0,order:5}},
-{{label:"1σ upper",data:D.u1,borderWidth:0,backgroundColor:"rgba(43,95,58,0.10)",fill:"+1",pointRadius:0,order:4}},
-{{label:"1σ lower",data:D.l1,borderWidth:0,fill:false,pointRadius:0,order:4}},
-{{label:"Reports",data:D.c,borderColor:"rgba(43,95,58,0.85)",backgroundColor:D.l.map(m=>bm.includes(m)?"rgba(230,126,34,0.5)":evtMs.includes(m)?"rgba(192,57,43,0.4)":"rgba(43,95,58,0.25)"),borderWidth:1.5,type:"bar",order:2}},
-{{label:"6mo MA",data:D.ma,borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:0,tension:.3,order:1}}];yL="Monthly Reports (orange=batch, red=event)";
-}}else if(v==="rate_m"){{ds=[{{label:"Rate/$M Revenue",data:D.rm.map(x=>x===null?undefined:x),borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}}];yL="Reports per $M Monthly Revenue";
-}}else if(v==="rate_10k"){{ds=[{{label:"Rate/10K Users",data:D.r10.map(x=>x===null?undefined:x),borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}}];yL="Reports per 10,000 Active Users";
-}}else if(v==="severity"){{ds=[{{label:"Deaths",data:D.d,backgroundColor:"rgba(192,57,43,0.8)",borderWidth:0,stack:"s"}},{{label:"Injuries",data:D.inj,backgroundColor:"rgba(230,126,34,0.7)",borderWidth:0,stack:"s"}},{{label:"Malfunctions",data:D.mal,backgroundColor:"rgba(43,95,58,0.3)",borderWidth:0,stack:"s"}}];yL="Events by Type";
-}}else if(v==="zscore"){{const clr=D.z.map(z=>z>2?"rgba(192,57,43,0.8)":z>1.5?"rgba(230,126,34,0.7)":z<-1.5?"rgba(43,95,58,0.6)":"rgba(43,95,58,0.25)");
-ds=[{{label:"Z-Score",data:D.z,backgroundColor:clr,borderWidth:0,type:"bar"}},{{label:"+2σ",data:D.l.map(()=>2),borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false}},{{label:"-2σ",data:D.l.map(()=>-2),borderColor:"rgba(43,95,58,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false}}];yL="Z-Score (std deviations)";
-}}else if(v==="stock"){{const sp=D.sp||{{}};const sl=D.l.filter(m=>sp[m]);const sv=sl.map(m=>sp[m]);const sc=sl.map(m=>{{const i=D.l.indexOf(m);return i>=0?D.c[i]:null}});
-ds=[{{label:"Stock ($)",data:sv,borderColor:"#2B5F3A",borderWidth:2,fill:false,pointRadius:1.5,tension:.2}},{{label:"MAUDE Reports",data:sc,borderColor:"rgba(192,57,43,0.6)",borderWidth:1.5,fill:false,pointRadius:0,tension:.2,yAxisID:"y1"}}];
-charts[did]=new Chart(ctx,{{type:"line",data:{{labels:sl,datasets:ds}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:"index",intersect:false}},scales:{{x:{{grid:{{color:"rgba(0,0,0,.05)"}},ticks:{{color:"#7a8f80",maxRotation:45,font:{{size:10}}}}}},y:{{position:"left",grid:{{color:"rgba(0,0,0,.05)"}},ticks:{{color:"#2B5F3A",font:{{size:10}}}},title:{{display:true,text:"Stock ($)",color:"#2B5F3A",font:{{size:11}}}}}},y1:{{position:"right",grid:{{drawOnChartArea:false}},ticks:{{color:"#c0392b",font:{{size:10}}}},title:{{display:true,text:"MAUDE Reports",color:"#c0392b",font:{{size:11}}}}}}}},plugins:{{legend:{{labels:{{color:"#4a5f50",boxWidth:12,font:{{size:10}}}}}},zoom:{{pan:{{enabled:true,mode:"x"}},zoom:{{wheel:{{enabled:true}},drag:{{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"}},mode:"x"}}}},tooltip:{{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1}}}}}}}});return;}}
-charts[did]=new Chart(ctx,{{type:"line",data:{{labels:D.l,datasets:ds}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:"index",intersect:false}},scales:{{x:{{grid:{{color:"rgba(0,0,0,.05)"}},ticks:{{color:"#7a8f80",maxRotation:45,font:{{size:10}}}}}},y:{{grid:{{color:"rgba(0,0,0,.05)"}},ticks:{{color:"#4a5f50",font:{{size:10}}}},title:{{display:true,text:yL,color:"#4a5f50",font:{{size:11}}}}}}}},plugins:{{legend:{{labels:{{color:"#4a5f50",boxWidth:12,font:{{size:10}}}}}},zoom:{{pan:{{enabled:true,mode:"x"}},zoom:{{wheel:{{enabled:true}},pinch:{{enabled:true}},drag:{{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"}},mode:"x"}}}},tooltip:{{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,callbacks:{{afterBody:function(it){{const i=it[0].dataIndex,m=D.l[i];let x=[];if(bm.includes(m))x.push("⚠ BATCH — received >> event count");evts.filter(e=>e.date===m).forEach(e=>x.push("📌 "+e.type+": "+e.desc));return x.length?"\\n"+x.join("\\n"):"";}}}}}}}}}}}});}}
-function af(){{const co=document.getElementById("fc").value,pr=document.getElementById("fp").value,sig=document.getElementById("fs").value,vw=document.getElementById("fv").value;
-const so={{"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3}};
-document.querySelectorAll(".pr,.card").forEach(el=>{{let sh=true;const ec=el.dataset.co,ei=el.dataset.id,es=el.dataset.sig,ic=el.dataset.comb==="1";
+const CD=__CHART_DATA__;
+const DC=__DEVICE_COMPANIES__;
+const charts={};
+function init(){for(const[d,data]of Object.entries(CD))mk(d,data,"reports");
+document.querySelectorAll(".cc").forEach(function(cc){cc.querySelectorAll(".cb").forEach(function(b){b.addEventListener("click",function(){
+var did=cc.id.replace("cc-",""),v=this.dataset.v;
+if(v==="reset"){if(charts[did])charts[did].resetZoom();return}
+cc.querySelectorAll(".cb:not(.rst)").forEach(function(x){x.classList.remove("active")});this.classList.add("active");mk(did,CD[did],v)})})})};
+function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();
+var ds=[],yL="",bm=D.bm||[],evts=D.evts||[],evtMs=evts.map(function(e){return e.date});
+if(v==="reports"){ds=[
+{label:"2s upper",data:D.u2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:"+1",pointRadius:0,order:5},
+{label:"2s lower",data:D.l2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:false,pointRadius:0,order:5},
+{label:"1s upper",data:D.u1,borderWidth:0,backgroundColor:"rgba(43,95,58,0.10)",fill:"+1",pointRadius:0,order:4},
+{label:"1s lower",data:D.l1,borderWidth:0,fill:false,pointRadius:0,order:4},
+{label:"Reports",data:D.c,borderColor:"rgba(43,95,58,0.85)",backgroundColor:D.l.map(function(m){return bm.includes(m)?"rgba(230,126,34,0.5)":evtMs.includes(m)?"rgba(192,57,43,0.4)":"rgba(43,95,58,0.25)"}),borderWidth:1.5,type:"bar",order:2},
+{label:"6mo MA",data:D.ma,borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:0,tension:.3,order:1}];yL="Monthly Reports (orange=batch, red=event)";
+}else if(v==="rate_m"){ds=[{label:"Rate/$M Revenue",data:D.rm.map(function(x){return x===null?undefined:x}),borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per $M Monthly Revenue";
+}else if(v==="rate_10k"){ds=[{label:"Rate/10K Users",data:D.r10.map(function(x){return x===null?undefined:x}),borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per 10,000 Active Users";
+}else if(v==="severity"){ds=[{label:"Deaths",data:D.d,backgroundColor:"rgba(192,57,43,0.8)",borderWidth:0,stack:"s"},{label:"Injuries",data:D.inj,backgroundColor:"rgba(230,126,34,0.7)",borderWidth:0,stack:"s"},{label:"Malfunctions",data:D.mal,backgroundColor:"rgba(43,95,58,0.3)",borderWidth:0,stack:"s"}];yL="Events by Type";
+}else if(v==="zscore"){var clr=D.z.map(function(z){return z>2?"rgba(192,57,43,0.8)":z>1.5?"rgba(230,126,34,0.7)":z<-1.5?"rgba(43,95,58,0.6)":"rgba(43,95,58,0.25)"});
+ds=[{label:"Z-Score",data:D.z,backgroundColor:clr,borderWidth:0,type:"bar"},{label:"+2s",data:D.l.map(function(){return 2}),borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false},{label:"-2s",data:D.l.map(function(){return -2}),borderColor:"rgba(43,95,58,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false}];yL="Z-Score (std deviations)";
+}else if(v==="stock"){var sp=D.sp||{};var sl=D.l.filter(function(m){return sp[m]});var sv=sl.map(function(m){return sp[m]});var sc=sl.map(function(m){var i=D.l.indexOf(m);return i>=0?D.c[i]:null});
+ds=[{label:"Stock ($)",data:sv,borderColor:"#2B5F3A",borderWidth:2,fill:false,pointRadius:1.5,tension:.2},{label:"MAUDE Reports",data:sc,borderColor:"rgba(192,57,43,0.6)",borderWidth:1.5,fill:false,pointRadius:0,tension:.2,yAxisID:"y1"}];
+charts[did]=new Chart(ctx,{type:"line",data:{labels:sl,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{position:"left",grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}},y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1}}}});return;}
+charts[did]=new Chart(ctx,{type:"line",data:{labels:D.l,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#4a5f50",font:{size:10}},title:{display:true,text:yL,color:"#4a5f50",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},pinch:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,callbacks:{afterBody:function(it){var i=it[0].dataIndex,m=D.l[i];var x=[];if(bm.includes(m))x.push("BATCH - received >> event count");evts.filter(function(e){return e.date===m}).forEach(function(e){x.push(e.type+": "+e.desc)});return x.length?"\n"+x.join("\n"):"";}}}}}});}
+function af(){var co=document.getElementById("fc").value,pr=document.getElementById("fp").value,sig=document.getElementById("fs").value,vw=document.getElementById("fv").value;
+var so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3};
+document.querySelectorAll(".pr,.card").forEach(function(el){var sh=true;var ec=el.dataset.co,ei=el.dataset.id,es=el.dataset.sig,ic=el.dataset.comb==="1";
 if(co!=="all"&&ec!==co)sh=false;if(pr!=="all"&&ei!==pr)sh=false;
-if(sig!=="all"){{if(sig==="CRITICAL"&&es!=="CRITICAL")sh=false;if(sig==="ELEVATED"&&(so[es]||3)>1)sh=false;if(sig==="WATCH"&&(so[es]||3)>2)sh=false;}}
-if(vw==="combined"&&!ic)sh=false;if(vw==="individual"&&ic)sh=false;el.style.display=sh?"":"none";}});}}
+if(sig!=="all"){if(sig==="CRITICAL"&&es!=="CRITICAL")sh=false;if(sig==="ELEVATED"&&(so[es]||3)>1)sh=false;if(sig==="WATCH"&&(so[es]||3)>2)sh=false;}
+if(vw==="combined"&&!ic)sh=false;if(vw==="individual"&&ic)sh=false;el.style.display=sh?"":"none";});}
 document.addEventListener("DOMContentLoaded",init);
 </script></body></html>'''
+    # Inject JSON data into JavaScript placeholders (avoids f-string brace conflicts)
+    html = html.replace("__CHART_DATA__", json.dumps(cd))
+    html = html.replace("__DEVICE_COMPANIES__", json.dumps({d["id"]:d["company"] for d in DEVICES}))
     with open("docs/index.html","w") as f: f.write(html)
     print(f"\nDashboard: docs/index.html ({len(html)//1024}KB)")
 
