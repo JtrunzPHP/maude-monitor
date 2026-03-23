@@ -1,0 +1,4 @@
+month,count,avg_12m,sd_12m,z_score,ma6,upper_1sd,upper_2sd,lower_1sd,lower_2sd,deaths,injuries,malfunctions,severity_score,rate_per_m,rate_per_10k,slope_6m,quarter
+2025-12,8,8.0,0,0,8.0,8.0,8.0,8.0,8.0,0,0,8,8,0.02,0.0235,0,2025-Q4
+2026-01,45,26.5,18.5,1.0,26.5,45.0,63.5,8.0,0,0,4,41,53,0.11,0.1268,0,2026-Q1
+2026-02,238,97.0,100.8,1.4,97.0,197.8,298.7,0,0,0,3,235,244,0.56,0.6704,0,2026-Q1
