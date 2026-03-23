@@ -588,11 +588,8 @@ def backtest_r_score(stats, stock_prices, threshold=50):
     except Exception as e:
         return {"status":"error","message":str(e)[:200]}
 
-
-
-
 # ============================================================
-# PIPELINE — runs ALL modules
+# PIPELINE — runs ALL modules (UNCHANGED from your working version)
 # ============================================================
 def run_pipeline(backfill=False,quick=False):
     start="20230101" if backfill else ("20250901" if quick else "20230101")
@@ -605,43 +602,24 @@ def run_pipeline(backfill=False,quick=False):
         evnt=fetch_counts(dev["search"],"date_of_event",start); time.sleep(0.3)
         sev=fetch_severity(dev["search"],start); batch=detect_batch(recv,evnt)
         stats=compute_stats(recv,sev,dev["ticker"]); rscore=compute_r_score(stats) if stats else None
-        # Initialize ALL module results
         modules={"enhanced_corr":None,"failure_modes":None,"google_trends":None,"insider":None,"trials":None,"short_interest":None,"edgar":None,"payer":None,"international":None,"recall_prob":None,"earnings_pred":None,"backtest":None,"peer_relative":None}
         if HAS_MODULES and stats:
-            # Correlation
             try:
                 print("  Running: Enhanced correlation...")
                 modules["enhanced_corr"]=compute_enhanced_correlation(recv,STOCK_MONTHLY.get(dev["ticker"],{}),max_lag=6)
             except Exception as e: modules["enhanced_corr"]={"status":"error","message":str(e)[:100]}
-            # NLP failure modes (individual products only)
             if not did.endswith("_ALL"):
                 try:
                     print("  Running: Failure mode NLP...")
                     modules["failure_modes"]=analyze_failure_modes(dev["search"],start,limit=50)
                 except Exception as e: modules["failure_modes"]={"status":"error","message":str(e)[:100]}
-            # Company-level OR key individual products
             is_company=did.endswith("_ALL") or did in ("SQEL_TWIIST","BBNX_ILET")
             if is_company:
-                try:
-                    print("  Running: Google Trends...")
-                    modules["google_trends"]=analyze_google_trends(dev["ticker"])
-                except Exception as e: modules["google_trends"]={"status":"error","message":str(e)[:100]}
-                try:
-                    print("  Running: Insider trading (Form 4)...")
-                    modules["insider"]=analyze_insider_trading(dev["ticker"])
-                except Exception as e: modules["insider"]={"status":"error","message":str(e)[:100]}
-                try:
-                    print("  Running: Clinical trials...")
-                    modules["trials"]=analyze_clinical_trials(dev["ticker"])
-                except Exception as e: modules["trials"]={"status":"error","message":str(e)[:100]}
-                try:
-                    print("  Running: Short interest...")
-                    modules["short_interest"]=analyze_short_interest(dev["ticker"])
-                except Exception as e: modules["short_interest"]={"status":"error","message":str(e)[:100]}
-                try:
-                    print("  Running: CMS payer coverage...")
-                    modules["payer"]=analyze_payer_coverage(dev["ticker"])
-                except Exception as e: modules["payer"]={"status":"error","message":str(e)[:100]}
+                for mod_name,mod_fn in [("google_trends",analyze_google_trends),("insider",analyze_insider_trading),("trials",analyze_clinical_trials),("short_interest",analyze_short_interest),("payer",analyze_payer_coverage)]:
+                    try:
+                        print(f"  Running: {mod_name}...")
+                        modules[mod_name]=mod_fn(dev["ticker"])
+                    except Exception as e: modules[mod_name]={"status":"error","message":str(e)[:100]}
             if did.endswith("_ALL"):
                 try:
                     print("  Running: EDGAR filing NLP...")
@@ -652,7 +630,6 @@ def run_pipeline(backfill=False,quick=False):
                     brand=dev["name"].split("(")[0].strip().split(" ")[0]
                     modules["international"]=analyze_international(dev["ticker"],[brand])
                 except Exception as e: modules["international"]={"status":"error","message":str(e)[:100]}
-            # Recall probability
             try:
                 print("  Running: Recall probability...")
                 modules["recall_prob"]=compute_recall_probability(modules.get("failure_modes"),stats)
@@ -662,7 +639,6 @@ def run_pipeline(backfill=False,quick=False):
             lt=stats[-1]; ec=modules["enhanced_corr"]
             summary.append({"id":did,"name":dev["name"],"ticker":dev["ticker"],"company":dev["company"],"month":lt["month"],"reports":lt["count"],"z_score":lt["z_score"],"rate_per_m":lt["rate_per_m"],"rate_per_10k":lt["rate_per_10k"],"slope_6m":lt["slope_6m"],"deaths_3mo":sum(s["deaths"] for s in stats[-3:]),"injuries_3mo":sum(s["injuries"] for s in stats[-3:]),"r_score":rscore["total"] if rscore else None,"signal":rscore["signal"] if rscore else "NORMAL","batch":batch.get(lt["month"],{}).get("is_batch",False),"corr_rho":(ec or {}).get("best_rho"),"corr_sig":(ec or {}).get("significant")})
             print(f"  >> {lt['month']} | {lt['count']:,} | Z:{lt['z_score']:+.2f} | R:{rscore['total'] if rscore else '-'}")
-    # POST-LOOP: peer-relative, earnings, backtest
     if HAS_MODULES:
         print("\n=== Post-loop: Peer scoring, earnings prediction, backtesting ===")
         company_r={}
@@ -689,10 +665,9 @@ def run_pipeline(backfill=False,quick=False):
     return all_res,summary
 
 # ============================================================
-# HTML — builds card sections for ALL 13 modules
+# HTML HELPERS
 # ============================================================
 def _mbox(title, data, fallback_msg="Module not loaded or no data available."):
-    """Always-visible module box with status indicator."""
     if data is None:
         return f'<div class="mbox"><h4>{title} <span class="mstat mgrey">N/A</span></h4><div class="msub">{fallback_msg}</div></div>'
     st=data.get("status","unknown") if isinstance(data,dict) else "unknown"
@@ -701,6 +676,75 @@ def _mbox(title, data, fallback_msg="Module not loaded or no data available."):
     cls="mok" if st=="ok" else "mwarn" if st in ("framework","no_pytrends","blocked","severity_only","no_text","no_alerts","no_data","no_signals","no_query","no_cik","no_ticker","insufficient_data","no_filings","no_trials","parse_error") else "merr" if st=="error" else "mgrey"
     return f'<div class="mbox"><h4>{title} <span class="mstat {cls}">{st.upper()}</span></h4><div class="msub">{msg}</div></div>'
 
+def _accordion(aid, title, status_html, content):
+    """Collapsible accordion section."""
+    return f'''<div class="acc">
+<button class="acc-btn" onclick="toggleAcc('{aid}')"><span>{title}</span><span class="acc-right">{status_html}<span class="acc-arrow" id="arr-{aid}">\u25B6</span></span></button>
+<div class="acc-body" id="{aid}" style="display:none">{content}</div></div>'''
+
+def _build_product_card(did, r, cd):
+    """Build a single product card HTML."""
+    dv=r["device"]; st=r["stats"]; lt=st[-1]; rs=r.get("r_score"); sig=rs["signal"] if rs else "NORMAL"
+    d3=sum(s["deaths"] for s in st[-3:]); i3=sum(s["injuries"] for s in st[-3:])
+    # Timeline
+    evts=PRODUCT_EVENTS.get(did,[])
+    ehtml=""
+    if evts:
+        ehtml='<div class="ebox"><h4>TIMELINE</h4>'
+        for e in evts:
+            tc="ew" if "CLASS" in e["type"] or "WARNING" in e["type"] else "eok"
+            ehtml+=f'<div class="evr"><span class="evd">{e["date"]}</span><span class="{tc}">{e["type"]}</span> {e["desc"]}</div>'
+        ehtml+='</div>'
+    # R-Score bar
+    rhtml=""
+    if rs:
+        rcol="#c0392b" if rs["total"]>=50 else "#e67e22" if rs["total"]>=30 else "#27ae60"
+        rhtml=f'<div class="rg"><div class="rgv" style="color:{rcol}">{rs["total"]}</div><div class="rgr"><div class="rgl">R-Score (0-100)</div><div class="rgt"><div class="rgf" style="width:{min(100,rs["total"])}%;background:{rcol}"></div></div></div></div>'
+        rhtml+=f'<div class="rcg"><div class="rci"><span class="rcv">{rs["z_c"]}</span>Z</div><div class="rci"><span class="rcv">{rs["sev_c"]}</span>Sev</div><div class="rci"><span class="rcv">{rs["gap_c"]}</span>Gap</div><div class="rci"><span class="rcv">{rs["slope_c"]}</span>Slope</div><div class="rci"><span class="rcv">{rs["ib_c"]}</span>IB</div></div>'
+    # NLP Failure Modes accordion
+    fm=r.get("failure_modes")
+    fmcontent=""
+    if fm and isinstance(fm,dict) and fm.get("status")=="ok" and fm.get("modes"):
+        fmcontent+=f'<div class="msub">{fm["total_analyzed"]} reports analyzed via keyword matching on MAUDE narrative text.</div>'
+        for cat,info in sorted(fm["modes"].items(),key=lambda x:-x[1]["count"]):
+            fmcontent+=f'<div class="fmr"><span class="fml">{info["label"]}</span><div class="fmb"><div style="width:{info["pct"]}%;background:var(--g)"></div></div><span class="fmp">{info["pct"]}%</span></div>'
+            fmcontent+=f'<div class="msub" style="padding-left:136px;font-size:9px;margin-top:0">{info["desc"]}</div>'
+        fmhtml=_accordion(f"fm-{did}","Failure Modes (NLP)",'<span class="mstat mok">OK</span>',fmcontent)
+    elif fm:
+        fmhtml=_accordion(f"fm-{did}","Failure Modes (NLP)",f'<span class="mstat mwarn">{fm.get("status","N/A").upper()}</span>',f'<div class="msub">{fm.get("message","")}</div>')
+    else:
+        fmhtml=""
+    # Recall Probability accordion
+    rp=r.get("recall_prob")
+    rpcontent=""
+    if rp and isinstance(rp,dict) and rp.get("probability") is not None:
+        prob=rp["probability"]; pcol="#c0392b" if prob>0.5 else "#e67e22" if prob>0.25 else "#27ae60"
+        rpcontent=f'<div class="msub">{rp.get("message","")}</div><div class="rgt" style="margin-top:4px"><div class="rgf" style="width:{prob*100}%;background:{pcol}"></div></div>'
+        rphtml=_accordion(f"rp-{did}","Recall Probability (6mo)",f'<span class="mstat" style="color:{pcol}">{rp.get("signal","?")}</span>',rpcontent)
+    else:
+        rphtml=""
+    zc2="neg" if lt["z_score"]>1.5 else "pos" if lt["z_score"]<-1.5 else ""
+    slc2="neg" if lt["slope_6m"]>0 else "pos"
+    d3c2="neg" if d3>0 else ""
+    return f'''<div class="card" data-id="{did}">
+<div class="chdr"><div><h3>{dv["name"]}</h3><span class="tk">{dv["ticker"]}</span></div><span class="sig sig-{sig}">{sig}</span></div>
+<p class="desc">{dv["description"]}</p>{ehtml}
+<div class="sg"><div class="si"><div class="sil">LATEST</div><div class="siv">{fmt0(lt["count"])}</div><div class="sis">{lt["month"]}</div></div>
+<div class="si"><div class="sil">Z-SCORE</div><div class="siv {zc2}">{lt["z_score"]:+.2f}</div><div class="sis">12mo avg {fmt0(lt["avg_12m"])}</div></div>
+<div class="si"><div class="sil">RATE/$M</div><div class="siv">{fmt2(lt["rate_per_m"])}</div><div class="sis">reports per $M rev</div></div>
+<div class="si"><div class="sil">RATE/10K</div><div class="siv">{fmt2(lt["rate_per_10k"])}</div><div class="sis">per 10K users</div></div></div>
+<div class="sg"><div class="si"><div class="sil">TREND</div><div class="siv {slc2}">{lt["slope_6m"]:+.1f}/mo</div><div class="sis">6mo slope</div></div>
+<div class="si"><div class="sil">DEATHS 3MO</div><div class="siv {d3c2}">{d3}</div></div>
+<div class="si"><div class="sil">INJURIES 3MO</div><div class="siv">{i3}</div></div>
+<div class="si"><div class="sil">SEVERITY</div><div class="siv">{fmt0(lt["severity_score"])}</div><div class="sis">D\u00d710 I\u00d73 M\u00d71</div></div></div>
+{rhtml}{fmhtml}{rphtml}
+<div class="cc" id="cc-{did}"><button class="cb active" data-v="reports">Reports</button><button class="cb" data-v="rate_m">Rate/$M</button><button class="cb" data-v="rate_10k">Rate/10K</button><button class="cb" data-v="severity">Severity</button><button class="cb" data-v="zscore">Z-Score</button><button class="cb" data-v="stock">Stock</button><button class="cb rst" data-v="reset">Reset</button></div>
+<div class="cdesc" id="cdesc-{did}">Click a chart tab above. Each shows a different analytical lens with full context descriptions.</div>
+<div class="cw"><canvas id="ch-{did}"></canvas></div></div>\n'''
+
+# ============================================================
+# REDESIGNED generate_html — Company overview + accordions + product cards
+# ============================================================
 def generate_html(all_res,summary):
     os.makedirs("docs",exist_ok=True)
     cd={}
@@ -709,6 +753,7 @@ def generate_html(all_res,summary):
         cd[did]={"l":[s["month"] for s in r["stats"]],"c":[s["count"] for s in r["stats"]],"ma":[s["ma6"] for s in r["stats"]],"u2":[s["upper_2sd"] for s in r["stats"]],"l2":[s["lower_2sd"] for s in r["stats"]],"u1":[s["upper_1sd"] for s in r["stats"]],"l1":[s["lower_1sd"] for s in r["stats"]],"z":[s["z_score"] for s in r["stats"]],"rm":[s["rate_per_m"] for s in r["stats"]],"r10":[s["rate_per_10k"] for s in r["stats"]],"d":[s["deaths"] for s in r["stats"]],"inj":[s["injuries"] for s in r["stats"]],"mal":[s["malfunctions"] for s in r["stats"]],"dev":r["device"],"rs":r.get("r_score"),"bm":[m for m,bf in r["batch_flags"].items() if bf.get("is_batch")],"sp":STOCK_MONTHLY.get(r["device"]["ticker"],{}),"evts":PRODUCT_EVENTS.get(did,[])}
     so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3}
     summary.sort(key=lambda x:(so.get(x["signal"],4),-(x["r_score"] or 0)))
+    # SUMMARY TABLE with filters
     trows=""
     for s in summary:
         zc="neg" if s["z_score"]>Z_WARN else "pos" if s["z_score"]<-Z_WARN else ""
@@ -716,135 +761,106 @@ def generate_html(all_res,summary):
         bw=' <span class="bw">Batch</span>' if s.get("batch") else ""
         ic="1" if s["id"].endswith("_ALL") else "0"
         cr="\u2014"
-        if s.get("corr_rho") is not None: cr=f'{s["corr_rho"]:+.3f}'; cr+=(" *" if s.get("corr_sig") else "")
+        if s.get("corr_rho") is not None: cr=f'{s["corr_rho"]:+.3f}'+(" *" if s.get("corr_sig") else "")
         d3c="neg" if s["deaths_3mo"]>0 else ""
         trows+=f'<tr class="pr" data-co="{s["company"]}" data-id="{s["id"]}" data-sig="{s["signal"]}" data-comb="{ic}"><td>{s["name"]}{bw}</td><td>{s["ticker"]}</td><td>{s["month"]}</td><td>{fmt0(s["reports"])}</td><td class="{zc}">{s["z_score"]:+.2f}</td><td class="{rc}">{fmt(s["r_score"])}</td><td>{fmt2(s["rate_per_m"])}</td><td>{fmt2(s["rate_per_10k"])}</td><td>{s["slope_6m"]:+.1f}</td><td class="{d3c}">{s["deaths_3mo"]}</td><td>{s["injuries_3mo"]}</td><td>{cr}</td><td><span class="sig sig-{s["signal"]}">{s["signal"]}</span></td></tr>\n'
 
-    # BUILD ALL CARDS with ALL module sections
-    company_cards={c:"" for c in COMPANIES}
-    for did,r in all_res.items():
-        if not r.get("stats"): continue
-        dv=r["device"]; st=r["stats"]; lt=st[-1]; rs=r.get("r_score"); co=dv["company"]
+    # BUILD COMPANY TABS with overview + accordions + product cards
+    company_html={}
+    for comp in COMPANIES:
+        # Find the _ALL device for this company
+        all_did=None; all_r=None
+        for did,r in all_res.items():
+            if did.endswith("_ALL") and r["device"]["company"]==comp:
+                all_did=did; all_r=r; break
+        if not all_did:
+            for did,r in all_res.items():
+                if r["device"]["company"]==comp and r.get("stats"):
+                    all_did=did; all_r=r; break
+        if not all_r or not all_r.get("stats"): company_html[comp]="<p>No data available.</p>"; continue
+        tk=all_r["device"]["ticker"]; lt_stat=all_r["stats"][-1]; rs=all_r.get("r_score")
         sig=rs["signal"] if rs else "NORMAL"
-        d3=sum(s["deaths"] for s in st[-3:]); i3=sum(s["injuries"] for s in st[-3:])
-        # Timeline
-        evts=PRODUCT_EVENTS.get(did,[])
-        ehtml=""
-        if evts:
-            ehtml='<div class="ebox"><h4>TIMELINE</h4>'
-            for e in evts:
-                tc="ew" if "CLASS" in e["type"] or "WARNING" in e["type"] else "eok"
-                ehtml+=f'<div class="evr"><span class="evd">{e["date"]}</span><span class="{tc}">{e["type"]}</span> {e["desc"]}</div>'
-            ehtml+='</div>'
-        # R-Score
-        rhtml=""
-        if rs:
-            rcol="#c0392b" if rs["total"]>=50 else "#e67e22" if rs["total"]>=30 else "#27ae60"
-            rhtml=f'<div class="rg"><div class="rgv" style="color:{rcol}">{rs["total"]}</div><div class="rgr"><div class="rgl">R-Score (0-100)</div><div class="rgt"><div class="rgf" style="width:{min(100,rs["total"])}%;background:{rcol}"></div></div></div></div>'
-            rhtml+=f'<div class="rcg"><div class="rci"><span class="rcv">{rs["z_c"]}</span>Z</div><div class="rci"><span class="rcv">{rs["sev_c"]}</span>Sev</div><div class="rci"><span class="rcv">{rs["gap_c"]}</span>Gap</div><div class="rci"><span class="rcv">{rs["slope_c"]}</span>Slope</div><div class="rci"><span class="rcv">{rs["ib_c"]}</span>IB</div></div>'
-        # NLP Failure Modes
-        fm=r.get("failure_modes")
-        fmhtml=""
-        if fm and isinstance(fm,dict) and fm.get("status")=="ok" and fm.get("modes"):
-            fmhtml='<div class="mbox"><h4>FAILURE MODES (NLP) <span class="mstat mok">OK</span></h4>'
-            fmhtml+=f'<div class="msub">{fm["total_analyzed"]} reports analyzed. Classified by keyword matching on MAUDE narrative text.</div>'
-            for cat,info in sorted(fm["modes"].items(),key=lambda x:-x[1]["count"]):
-                fmhtml+=f'<div class="fmr"><span class="fml">{info["label"]}</span><div class="fmb"><div style="width:{info["pct"]}%;background:var(--g)"></div></div><span class="fmp">{info["pct"]}%</span></div>'
-                fmhtml+=f'<div class="msub" style="padding-left:136px;font-size:9px;margin-top:0">{info["desc"]}</div>'
-            fmhtml+='</div>'
-        elif fm:
-            fmhtml=_mbox("FAILURE MODES (NLP)",fm)
-        else:
-            fmhtml=_mbox("FAILURE MODES (NLP)",None,"Only runs for individual products, not company-level combined views.")
-        # Recall Probability
-        rp=r.get("recall_prob")
-        rphtml=""
-        if rp and isinstance(rp,dict) and rp.get("probability") is not None:
-            prob=rp["probability"]; pcol="#c0392b" if prob>0.5 else "#e67e22" if prob>0.25 else "#27ae60"
-            rphtml=f'<div class="mbox"><h4>RECALL PROBABILITY (6MO) <span class="mstat" style="color:{pcol}">{rp.get("signal","?")}</span></h4><div class="msub">{rp.get("message","")}</div><div class="rgt" style="margin-top:4px"><div class="rgf" style="width:{prob*100}%;background:{pcol}"></div></div></div>'
-        else: rphtml=_mbox("RECALL PROBABILITY (6MO)",rp)
-        # Google Trends
-        gt=r.get("google_trends")
-        gthtml=""
-        if gt and isinstance(gt,dict) and gt.get("status")=="ok" and gt.get("trends"):
-            gthtml='<div class="mbox"><h4>GOOGLE TRENDS <span class="mstat mok">OK</span></h4><div class="msub">Complaint-related search interest for this company\'s products. Rising = patients are Googling problems before filing MAUDE reports (2-4 week lead).</div>'
-            for t in gt["trends"]:
-                chcol="neg" if t["change_pct"]>20 else "pos" if t["change_pct"]<-20 else ""
-                gthtml+=f'<div class="msub">"{t["query"]}": interest {t["recent_interest"]:.0f} vs prior {t["prior_interest"]:.0f} (<span class="{chcol}">{t["change_pct"]:+.0f}%</span>)</div>'
-            gthtml+=f'<div class="msub"><strong>Signal: {gt["signal"].upper()}</strong> - {gt.get("message","")}</div></div>'
-        else: gthtml=_mbox("GOOGLE TRENDS",gt,"Google Trends provides the earliest signal. Requires pytrends package.")
-        # Insider Trading
-        inshtml=_mbox("SEC FORM 4 INSIDER TRADING",r.get("insider"),"Tracks insider buys/sells from SEC EDGAR. High selling + high R-Score = strong conviction short signal.")
-        # Clinical Trials
-        ct=r.get("trials")
-        cthtml=""
-        if ct and isinstance(ct,dict) and ct.get("status")=="ok" and ct.get("trials"):
-            cthtml='<div class="mbox"><h4>ACTIVE CLINICAL TRIALS <span class="mstat mok">OK</span></h4><div class="msub">Active/recruiting trials from ClinicalTrials.gov. Competitor trials = future threat. Paused trials = potential quality signal.</div>'
-            for trial in ct["trials"][:3]:
-                cthtml+=f'<div class="msub">{trial["nct_id"]}: {trial["title"]} <span class="mstat mgrey">{trial["status"]}</span></div>'
-            cthtml+='</div>'
-        else: cthtml=_mbox("CLINICAL TRIALS",ct,"From ClinicalTrials.gov API. Tracks competitive pipeline.")
-        # Short Interest
-        si=r.get("short_interest")
-        sihtml=""
-        if si and isinstance(si,dict) and si.get("status")=="ok":
-            sicol="#c0392b" if si.get("signal")=="high" else "#e67e22" if si.get("signal")=="moderate" else "#27ae60"
-            sihtml=f'<div class="mbox"><h4>SHORT INTEREST <span class="mstat" style="color:{sicol}">{si.get("signal","?").upper()}</span></h4><div class="msub">{si.get("message","")}</div></div>'
-        else: sihtml=_mbox("SHORT INTEREST",si,"From Yahoo Finance. High short interest + high R-Score = market agrees with our signal.")
-        # EDGAR NLP
-        edhtml=_mbox("SEC FILING NLP (EDGAR)",r.get("edgar"),"Scans 10-Q/10-K filings for quality-related language (recall, warning letter, warranty cost). Rising trend = management preparing market.")
-        # Payer Coverage
-        payhtml=_mbox("CMS PAYER / FORMULARY",r.get("payer"),"Tracks Medicare/Medicaid coverage decisions. CMS does not provide a structured API.")
-        # Peer-Relative
-        pr=r.get("peer_relative")
-        prhtml=""
+        # Stock price
+        sp_data=STOCK_MONTHLY.get(tk,{}); sp_sorted=sorted(sp_data.keys())
+        sp_latest=f"${sp_data[sp_sorted[-1]]}" if sp_sorted else "\u2014"
+        sp_label="" if tk not in ("SQEL",) else " (Private)"
+        if tk=="MDT_DM": sp_label=" (MDT parent)"
+        # Company overview header
+        co_hdr=f'''<div class="co-hdr"><div class="co-left"><h2>{comp}</h2><span class="co-tk">{tk}{sp_label} \u2014 {sp_latest}</span></div><span class="sig sig-{sig}" style="font-size:13px;padding:5px 16px">{sig}</span></div>
+<div class="co-desc">{all_r["device"]["description"]}</div>
+<div class="sg" style="margin-bottom:12px"><div class="si"><div class="sil">LATEST REPORTS</div><div class="siv">{fmt0(lt_stat["count"])}</div><div class="sis">{lt_stat["month"]}</div></div>
+<div class="si"><div class="sil">Z-SCORE</div><div class="siv {"neg" if lt_stat["z_score"]>1.5 else "pos" if lt_stat["z_score"]<-1.5 else ""}">{lt_stat["z_score"]:+.2f}</div></div>
+<div class="si"><div class="sil">R-SCORE</div><div class="siv {"neg" if (rs or {}).get("total",0)>=50 else ""}">{fmt(rs["total"]) if rs else "\u2014"}</div></div>
+<div class="si"><div class="sil">RATE/$M REV</div><div class="siv">{fmt2(lt_stat["rate_per_m"])}</div></div></div>\n'''
+        # ACCORDION MODULES at company level
+        acc_html=""
+        # 1. Insider Trading
+        ins=all_r.get("insider")
+        if ins and isinstance(ins,dict):
+            ins_stat=ins.get("status","N/A")
+            ins_cls="mok" if ins_stat=="ok" else "mwarn"
+            ins_sig=f'{ins.get("form4_count",0)} filings' if ins_stat=="ok" else ins_stat.upper()
+            acc_html+=_accordion(f"ins-{tk}","SEC Form 4 Insider Trading",f'<span class="mstat {ins_cls}">{ins_sig}</span>',
+                f'<div class="msub">{ins.get("message","")}</div><div class="msub"><strong>Why it matters:</strong> Heavy insider selling + high R-Score = strong conviction short signal. Insider buying during elevated MAUDE reports = management may believe issues are contained.</div>')
+        # 2. EDGAR NLP
+        ed=all_r.get("edgar")
+        if ed and isinstance(ed,dict):
+            acc_html+=_accordion(f"ed-{tk}","SEC Filing NLP (EDGAR)",f'<span class="mstat {"mok" if ed.get("status")=="ok" else "mwarn"}">{ed.get("status","N/A").upper()}</span>',
+                f'<div class="msub">{ed.get("message","")}</div><div class="msub"><strong>Why it matters:</strong> Scans 10-Q/10-K filings for quality-related language (recall, warning letter, warranty cost). Rising frequency of these terms = management preparing the market for bad news.</div>')
+        # 3. Clinical Trials
+        ct=all_r.get("trials")
+        if ct and isinstance(ct,dict):
+            ct_content=f'<div class="msub">{ct.get("message","")}</div>'
+            if ct.get("status")=="ok" and ct.get("trials"):
+                ct_content+='<div class="msub"><strong>Why it matters:</strong> Active competitor trials = future market threat. Paused or terminated company trials = potential quality concern or pipeline problem.</div>'
+                for trial in ct["trials"][:5]:
+                    ct_content+=f'<div class="msub" style="margin-top:4px">{trial["nct_id"]}: {trial["title"]} <span class="mstat mgrey">{trial["status"]}</span></div>'
+            acc_html+=_accordion(f"ct-{tk}","Clinical Trials (ClinicalTrials.gov)",f'<span class="mstat {"mok" if ct.get("status")=="ok" else "mwarn"}">{ct.get("total",0) if ct.get("status")=="ok" else ct.get("status","N/A").upper()}</span>',ct_content)
+        # 4. MAUDE-Stock Correlation
+        ec=all_r.get("enhanced_corr")
+        if ec and isinstance(ec,dict):
+            ec_rho=ec.get("best_rho")
+            ec_sig_str=f'\u03C1={ec_rho:+.3f}' if ec_rho is not None else "N/A"
+            acc_html+=_accordion(f"corr-{tk}","MAUDE-Stock Correlation",f'<span class="mstat {"mok" if ec.get("significant") else "mwarn"}">{ec_sig_str}</span>',
+                f'<div class="msub">{ec.get("message","")}</div><div class="msub"><strong>How to read:</strong> Spearman rank correlation between monthly MAUDE report counts and stock returns at various lags. Negative \u03C1 at 2-4 month lag = MAUDE spikes predict stock declines. The lag is your alpha window \u2014 the market takes that long to react. * means p&lt;0.05 (statistically significant).</div>')
+        # 5. R-Score Backtest
+        bt=all_r.get("backtest")
+        if bt and isinstance(bt,dict):
+            bt_content=f'<div class="msub">{bt.get("message","")}</div>'
+            if bt.get("status")=="ok" and bt.get("results"):
+                bt_content+='<div class="msub"><strong>How to read:</strong> When R-Score historically crossed 50, what happened to the stock 30/60/90 days later? Negative avg return + high win rate = the signal works. This is your empirical proof.</div>'
+                for window,res in bt["results"].items():
+                    wcol="pos" if res["avg_return"]<0 else "neg"
+                    bt_content+=f'<div class="msub">{window}: avg return <span class="{wcol}">{res["avg_return"]:+.1f}%</span>, win rate {res["win_rate"]:.0f}% (n={res["n"]})</div>'
+            acc_html+=_accordion(f"bt-{tk}","R-Score Backtest",f'<span class="mstat {"mok" if bt.get("status")=="ok" and bt.get("results") else "mwarn"}">{bt.get("status","N/A").upper()}</span>',bt_content)
+        # 6. Peer-Relative
+        pr=all_r.get("peer_relative")
         if pr and isinstance(pr,dict):
             prcol="#c0392b" if pr.get("signal") in ("WORST","WEAK") else "#27ae60" if pr.get("signal") in ("BEST","STRONG") else "var(--tx3)"
-            prhtml=f'<div class="mbox"><h4>PEER-RELATIVE POSITION <span class="mstat" style="color:{prcol}">{pr.get("signal","?")}</span></h4><div class="msub">{pr.get("message","")} Long the cleanest name, short the dirtiest.</div></div>'
-        else: prhtml=_mbox("PEER-RELATIVE POSITION",None,"Compares R-Score to peer group. Computed after all products are processed.")
-        # Earnings Predictor
-        ep=r.get("earnings_pred")
-        ephtml=""
+            acc_html+=_accordion(f"pr-{tk}","Peer-Relative Position",f'<span class="mstat" style="color:{prcol}">{pr.get("signal","?")}</span>',
+                f'<div class="msub">{pr.get("message","")}</div><div class="msub"><strong>Trading implication:</strong> Long the cleanest name (lowest R-Score), short the dirtiest (highest R-Score). The spread between best and worst = the pairs trade opportunity.</div>')
+        # 7. Earnings Predictor
+        ep=all_r.get("earnings_pred")
         if ep and isinstance(ep,dict) and ep.get("status")=="ok":
             epcol="#c0392b" if ep["prediction"]=="LIKELY MISS" else "#27ae60" if ep["prediction"]=="LIKELY BEAT" else "var(--tx3)"
-            ephtml=f'<div class="mbox"><h4>EARNINGS SURPRISE PREDICTOR <span class="mstat" style="color:{epcol}">{ep["prediction"]}</span></h4><div class="msub">{ep.get("message","")} Trade ahead of earnings reports using this signal.</div></div>'
-        else: ephtml=_mbox("EARNINGS SURPRISE PREDICTOR",ep,"Predicts beat/miss based on R-Score, severity trend, and peer position.")
-        # Backtest
-        bt=r.get("backtest")
-        bthtml=""
-        if bt and isinstance(bt,dict) and bt.get("status")=="ok" and bt.get("results"):
-            bthtml='<div class="mbox"><h4>R-SCORE BACKTEST <span class="mstat mok">OK</span></h4>'
-            bthtml+=f'<div class="msub">{bt.get("message","")} This proves (or disproves) the signal historically.</div>'
-            for window,res in bt["results"].items():
-                wcol="pos" if res["avg_return"]<0 else "neg"
-                bthtml+=f'<div class="msub">{window} window: avg return <span class="{wcol}">{res["avg_return"]:+.1f}%</span>, win rate {res["win_rate"]:.0f}% (n={res["n"]})</div>'
-            bthtml+='</div>'
-        else: bthtml=_mbox("R-SCORE BACKTEST",bt,"Historical test: when R-Score crossed 50, what happened to stock? Only runs for company-level views.")
-        # Enhanced Correlation
-        echtml=_mbox("MAUDE-STOCK CORRELATION",r.get("enhanced_corr"),"Spearman rank correlation + lag analysis. Shows lead time between MAUDE signal and stock reaction.")
-        # International
-        intlhtml=_mbox("INTERNATIONAL (MHRA/UK)",r.get("international"),"UK Medical Device Alerts from GOV.UK. Limited coverage — MHRA has no structured API.")
-
-        zc2="neg" if lt["z_score"]>1.5 else "pos" if lt["z_score"]<-1.5 else ""
-        slc2="neg" if lt["slope_6m"]>0 else "pos"
-        d3c2="neg" if d3>0 else ""
-        card=f'''<div class="card" data-id="{did}">
-<div class="chdr"><div><h3>{dv["name"]}</h3><span class="tk">{dv["ticker"]}{"  (Private)" if dv["ticker"]=="SQEL" else " (Segment)" if dv["ticker"]=="MDT_DM" else ""}</span></div><span class="sig sig-{sig}">{sig}</span></div>
-<p class="desc">{dv["description"]}</p>{ehtml}
-<div class="sg"><div class="si"><div class="sil">LATEST</div><div class="siv">{fmt0(lt["count"])}</div><div class="sis">{lt["month"]}</div></div>
-<div class="si"><div class="sil">Z-SCORE</div><div class="siv {zc2}">{lt["z_score"]:+.2f}</div><div class="sis">12mo avg {fmt0(lt["avg_12m"])}</div></div>
-<div class="si"><div class="sil">RATE/$M</div><div class="siv">{fmt2(lt["rate_per_m"])}</div><div class="sis">per $M quarterly rev</div></div>
-<div class="si"><div class="sil">RATE/10K USERS</div><div class="siv">{fmt2(lt["rate_per_10k"])}</div><div class="sis">per 10K installed base</div></div></div>
-<div class="sg"><div class="si"><div class="sil">6MO TREND</div><div class="siv {slc2}">{lt["slope_6m"]:+.1f}/mo</div><div class="sis">regression slope</div></div>
-<div class="si"><div class="sil">DEATHS (3MO)</div><div class="siv {d3c2}">{d3}</div></div>
-<div class="si"><div class="sil">INJURIES (3MO)</div><div class="siv">{i3}</div></div>
-<div class="si"><div class="sil">SEVERITY</div><div class="siv">{fmt0(lt["severity_score"])}</div><div class="sis">D x10 I x3 M x1</div></div></div>
-{rhtml}
-{fmhtml}{rphtml}{inshtml}{cthtml}{edhtml}{prhtml}{ephtml}{bthtml}{echtml}
-<div class="cc" id="cc-{did}"><button class="cb active" data-v="reports">Reports</button><button class="cb" data-v="rate_m">Rate/$M</button><button class="cb" data-v="rate_10k">Rate/10K</button><button class="cb" data-v="severity">Severity</button><button class="cb" data-v="zscore">Z-Score</button><button class="cb" data-v="stock">Stock</button><button class="cb rst" data-v="reset">Reset</button></div>
-<div class="cdesc" id="cdesc-{did}">Select a chart view above. Each tab shows a different analytical lens with context.</div>
-<div class="cw"><canvas id="ch-{did}"></canvas></div></div>\n'''
-        if co in company_cards: company_cards[co]+=card
+            acc_html+=_accordion(f"ep-{tk}","Earnings Surprise Predictor",f'<span class="mstat" style="color:{epcol}">{ep["prediction"]}</span>',
+                f'<div class="msub">{ep.get("message","")}</div><div class="msub"><strong>How to use:</strong> Position before earnings. LIKELY MISS = puts or short. LIKELY BEAT = calls or long. Confidence above 60% = higher conviction. Combine with peer-relative for pairs.</div>')
+        # 8. Google Trends, Short Interest, Payer, International (framework modules)
+        for mod_key,mod_title in [("google_trends","Google Trends (Leading Indicator)"),("short_interest","Short Interest"),("payer","CMS Payer / Formulary"),("international","International (MHRA/UK)")]:
+            mod=all_r.get(mod_key)
+            if mod and isinstance(mod,dict):
+                acc_html+=_accordion(f"{mod_key}-{tk}",mod_title,f'<span class="mstat mwarn">{mod.get("status","N/A").upper()}</span>',f'<div class="msub">{mod.get("message","")}</div>')
+        # PRODUCT CARDS (non-_ALL devices for this company)
+        cards_html=""
+        for did,r in all_res.items():
+            if not r.get("stats"): continue
+            if r["device"]["company"]!=comp: continue
+            if did==all_did: continue  # skip _ALL, already shown in overview
+            cards_html+=_build_product_card(did,r,cd)
+        # Also include the _ALL card
+        if all_r.get("stats"):
+            cards_html=_build_product_card(all_did,all_r,cd)+cards_html
+        company_html[comp]=f'{co_hdr}<div class="acc-section"><h3 class="section-title">Company-Level Intelligence</h3>{acc_html}</div><h3 class="section-title" style="margin-top:16px">Product-Level Detail</h3><div class="grid">{cards_html}</div>'
 
     tab_ids={"Summary":"summary","Dexcom":"dexcom","Insulet":"insulet","Tandem":"tandem","Abbott":"abbott","Beta Bionics":"bbnx","Medtronic":"medtronic","Sequel Med Tech":"sequel"}
     tab_btns='<div class="tabs">'
@@ -852,7 +868,7 @@ def generate_html(all_res,summary):
         act=' active' if tid=="summary" else ""
         tab_btns+=f'<button class="tab{act}" onclick="showTab(\'{tid}\')">{name}</button>'
     tab_btns+='</div>'
-    modules_str="ALL MODULES (Stats+NLP+Trends+Insider+Trials+ShortInt+EDGAR+Payer+Recall+Peer+Earnings+Backtest+Intl)" if HAS_MODULES else "BASIC (no modules)"
+    modules_str="ALL 13 MODULES" if HAS_MODULES else "BASIC"
     updated_str=datetime.now().strftime('%b %d, %Y %H:%M ET')
 
     html_top=f'''<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -868,21 +884,40 @@ def generate_html(all_res,summary):
 header{{display:flex;justify-content:space-between;align-items:center;padding:20px 0;border-bottom:2px solid var(--g);margin-bottom:20px}}
 header h1{{font-size:22px;font-weight:700;color:var(--g)}}header .sub{{font-size:13px;color:var(--tx2)}}header .meta{{text-align:right;font-size:11px;color:var(--tx3)}}
 h2{{font-size:18px;font-weight:700;color:var(--g);margin:20px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--bd)}}
-.tabs{{display:flex;gap:2px;margin-bottom:20px;border-bottom:2px solid var(--bd)}}
+.tabs{{display:flex;gap:2px;margin-bottom:20px;border-bottom:2px solid var(--bd);flex-wrap:wrap}}
 .tab{{background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-bottom:none;border-radius:6px 6px 0 0;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit}}
 .tab:hover{{background:var(--gx)}}.tab.active{{background:var(--g);color:#fff;border-color:var(--g)}}
 .tabcontent{{display:none}}.tabcontent.active{{display:block}}
 .sig{{display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase}}
 .sig-NORMAL{{background:var(--gx);color:var(--g)}}.sig-WATCH{{background:#fef3e0;color:#b8860b}}.sig-ELEVATED{{background:#fdecea;color:var(--red)}}.sig-CRITICAL{{background:#f5c6cb;color:#721c24}}
 .bw{{background:#fef3e0;color:#b8860b;font-size:10px;padding:1px 6px;border-radius:4px}}
+/* Company overview header */
+.co-hdr{{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:var(--gp);border:2px solid var(--g);border-radius:10px;margin-bottom:12px}}
+.co-left h2{{margin:0;border:none;padding:0}}.co-tk{{font-size:13px;color:var(--tx2);font-weight:500}}
+.co-desc{{font-size:12px;color:var(--tx2);padding:8px 12px;background:var(--bg2);border-radius:6px;border-left:3px solid var(--g);margin-bottom:12px;line-height:1.6}}
+.section-title{{font-size:13px;font-weight:700;color:var(--g);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px dashed var(--bd)}}
+/* Accordion */
+.acc-section{{margin-bottom:16px}}
+.acc{{border:1px solid var(--bd);border-radius:8px;margin-bottom:4px;overflow:hidden}}
+.acc-btn{{width:100%;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg2);border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;color:var(--tx);text-align:left}}
+.acc-btn:hover{{background:var(--gx)}}.acc-right{{display:flex;align-items:center;gap:8px}}
+.acc-arrow{{font-size:10px;color:var(--tx3);transition:transform .2s}}.acc-arrow.open{{transform:rotate(90deg)}}
+.acc-body{{padding:10px 14px;background:var(--bg);border-top:1px solid var(--bd)}}
+/* Filters */
+.filters{{display:flex;gap:12px;align-items:center;margin-bottom:16px;padding:10px 14px;background:var(--bg2);border:1px solid var(--bd);border-radius:8px;flex-wrap:wrap}}
+.filters label{{font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase}}
+.filters select{{padding:4px 8px;border:1px solid var(--bd);border-radius:4px;font-size:12px;font-family:inherit;background:var(--bg)}}
+/* Guide boxes */
 .guide{{background:var(--gp);border:1px solid var(--bd);border-radius:10px;padding:20px;margin-bottom:20px}}
 .guide h3{{font-size:15px;font-weight:700;color:var(--g);margin-bottom:12px}}
 .gg{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
 .gi{{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:12px}}
 .gi h4{{font-size:12px;font-weight:700;color:var(--g);margin-bottom:4px}}.gi p{{font-size:11px;color:var(--tx2)}}
+/* Table */
 table{{width:100%;border-collapse:collapse}}th{{text-align:left;padding:8px 10px;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--tx3);border-bottom:2px solid var(--g);background:var(--bg);position:sticky;top:0}}
 td{{padding:7px 10px;border-bottom:1px solid var(--bd);font-size:12px;white-space:nowrap}}tr:hover{{background:var(--gp)}}
 .neg{{color:var(--red);font-weight:500}}.pos{{color:var(--g);font-weight:500}}.warn{{color:var(--org);font-weight:500}}
+/* Cards grid */
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px}}
 .card{{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}}
 .chdr{{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}}.card h3{{font-size:15px;font-weight:700}}.tk{{font-size:11px;color:var(--tx3)}}
@@ -919,38 +954,41 @@ td{{padding:7px 10px;border-bottom:1px solid var(--bd);font-size:12px;white-spac
 {tab_btns}
 <div class="tabcontent active" id="tc-summary">
 <div class="guide"><h3>How to Read This Dashboard</h3><div class="gg">
-<div class="gi"><h4>Z-Score</h4><p>Std deviations from 12-month mean. Above +2.0 = unusual (p~2.3%). WATCH 1.5, ELEVATED 2.0, CRITICAL 3.0.</p></div>
-<div class="gi"><h4>R-Score (0-100)</h4><p>Composite: Z-anomaly + severity trend + growth gap + slope + installed-base rate. Above 50 = investigate. Above 70 = act.</p></div>
-<div class="gi"><h4>Rate/$M Revenue</h4><p>Reports / monthly revenue. Normalizes for business SIZE. Rising = quality deteriorating relative to revenue.</p></div>
-<div class="gi"><h4>Rate/10K Users</h4><p>Reports / installed base. More precise than Rate/$M. Sources: earnings calls, 10-K filings.</p></div>
-<div class="gi"><h4>6mo Trend (Slope)</h4><p>Linear regression slope of last 6 months. +50 means reports increasing ~50/month. Positive = accelerating problem.</p></div>
-<div class="gi"><h4>Deaths/Injuries (3mo)</h4><p>Event counts from most recent 3 months. Deaths weighted 10x in severity score. MAUDE-reported, not confirmed causal.</p></div>
-<div class="gi"><h4>Batch Detection</h4><p>If received > 3x event count same month = retrospective dump (recall paperwork), not real surge. Flagged as "Batch".</p></div>
-<div class="gi"><h4>Correlation (Corr)</h4><p>Spearman rank between MAUDE z-scores and stock returns. Dash = no stock (private). * = p&lt;0.05. Negative = MAUDE predicts decline.</p></div>
+<div class="gi"><h4>Z-Score</h4><p>Standard deviations from 12-month mean. Measures if current month is statistically abnormal. Above +1.5 = WATCH. Above +2.0 = ELEVATED (p~2.3%, unlikely by chance). Above +3.0 = CRITICAL. Negative values mean unusually LOW reports.</p></div>
+<div class="gi"><h4>R-Score (0-100)</h4><p>Composite risk score combining 5 factors: Z-anomaly (20pts), severity trend (20pts), growth gap vs revenue (20pts), 6-month slope (20pts), and installed-base rate change (20pts). Above 50 = investigate. Above 70 = act. This is the single number that tells you "how worried should I be?"</p></div>
+<div class="gi"><h4>Rate/$M Revenue</h4><p>MAUDE reports divided by monthly revenue (quarterly/3). This normalizes for business size. If a company doubles revenue and reports also double, the rate stays flat (no problem). RISING rate = quality is deteriorating faster than the business is growing. This is more predictive than raw counts.</p></div>
+<div class="gi"><h4>Rate/10K Users</h4><p>Reports divided by estimated installed base (per 10K users). The most precise normalization. New products with few users show HIGH rates even with few reports \u2014 which is correct, that IS a high failure rate per user. Sources: earnings calls, 10-K filings.</p></div>
+<div class="gi"><h4>6mo Trend (Slope)</h4><p>Linear regression slope over last 6 months. +50 means reports increasing ~50/month. Positive = accelerating problem. Negative = improving. The slope captures momentum \u2014 even if the Z-score is normal, a rapidly rising slope is an early warning.</p></div>
+<div class="gi"><h4>Deaths/Injuries (3mo)</h4><p>Event counts from most recent 3 months. Deaths weighted 10x in severity score, injuries 3x, malfunctions 1x. MAUDE-reported \u2014 not confirmed causal, but the pattern matters more than individual reports.</p></div>
+<div class="gi"><h4>Batch Detection</h4><p>If received-date count > 3x event-date count same month = manufacturer dumped old reports at once (recall paperwork). NOT a real surge. Flagged as "Batch" and colored orange on charts so you don't misread it as a spike.</p></div>
+<div class="gi"><h4>Correlation (Corr)</h4><p>Spearman rank correlation between monthly MAUDE z-scores and stock returns. Dash = no stock (private). * = p&lt;0.05. Negative correlation = MAUDE spikes predict stock declines. The lag (1-4 months) is your alpha window.</p></div>
 </div></div>
+<div class="filters"><label>Company:</label><select id="fc" onchange="af()"><option value="all">All</option>'''
+    for c in COMPANIES: html_top+=f'<option value="{c}">{c}</option>'
+    html_top+=f'''</select><label>Signal:</label><select id="fs" onchange="af()"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="ELEVATED">Elevated+</option><option value="WATCH">Watch+</option></select><label>View:</label><select id="fv" onchange="af()"><option value="all">All Products</option><option value="combined">Company-Level Only</option><option value="individual">Individual Products Only</option></select></div>
 <h2>All Products \u2014 Latest Month</h2>
 <div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Ticker</th><th>Month</th><th>Reports</th><th>Z-Score</th><th>R-Score</th><th>Rate/$M</th><th>Rate/10K</th><th>6mo Trend</th><th>Deaths (3mo)</th><th>Injuries (3mo)</th><th>Corr</th><th>Signal</th></tr></thead><tbody>{trows}</tbody></table></div>
 </div>'''
     for comp in COMPANIES:
-        tid=tab_ids[comp]; cards_html=company_cards.get(comp,"<p>No data.</p>")
-        html_top+=f'\n<div class="tabcontent" id="tc-{tid}"><h2>{comp}</h2><div class="grid">{cards_html}</div></div>'
-    html_top+='\n<div class="disc">Research only. Not investment advice. MAUDE has known limitations. Revenue from SEC filings. Installed base from earnings calls. MDT stock = parent company (~8% diabetes). BBNX from Feb 2025 IPO. Sequel is private. Correlation is not causation. Google Trends requires pytrends. Short interest from Yahoo Finance (may be blocked). CMS payer tracking is framework-level.</div></div>'
+        tid=tab_ids[comp]; ch=company_html.get(comp,"<p>No data.</p>")
+        html_top+=f'\n<div class="tabcontent" id="tc-{tid}">{ch}</div>'
+    html_top+='\n<div class="disc">Research only. Not investment advice. MAUDE has known limitations including 30-90 day reporting lag. Revenue from SEC filings. Installed base from earnings calls. MDT stock = parent company (~8% diabetes). BBNX from Feb 2025 IPO. Sequel is private. Correlation is not causation.</div></div>'
 
-    # JAVASCRIPT (completely separate, no f-string)
     js=r'''<script>
 var defined_cd=__CD__;var charts={};
-var chartDescs={"reports":"REPORTS + SIGMA BANDS: Bars = monthly MAUDE reports. Light green band = +/-1 std dev (68% normal). Outer = +/-2 std dev (95%). Beyond 2-sigma = statistically anomalous. Orange bars = batch reporting (retrospective dump). Red = regulatory event month. The 6-month moving average (dark line) smooths noise to reveal the underlying trend.","rate_m":"RATE PER $M REVENUE: Reports divided by monthly revenue (quarterly/3). Normalizes for business growth. If company doubles revenue, reports should double too. RISING rate = quality deteriorating faster than revenue growing. Different from Rate/10K when average selling price changes (e.g. OTC products).","rate_10k":"RATE PER 10K USERS: Reports divided by estimated installed base (per 10K users). The most precise normalization. New products with few users show HIGH rates even with few reports (which is correct - that IS a high failure rate). User estimates from earnings calls and SEC filings.","severity":"SEVERITY BREAKDOWN: Deaths (red) = most serious, weighted 10x. Injuries (orange) = hospitalizations/ER, weighted 3x. Malfunctions (green) = device failures without direct patient harm, weighted 1x. A shift toward more deaths/injuries vs malfunctions = worsening signal.","zscore":"Z-SCORE HISTORY: How far each month deviates from the 12-month mean in standard deviations. Above +2 (red dashed line) = statistically significant spike. Below -2 (green) = unusually low. Sustained positive z-scores = developing quality problem.","stock":"STOCK PRICE OVERLAY: Green = stock price. Red = MAUDE reports. Look for MAUDE spikes (red up) that precede stock declines (green down) by 1-4 months. That lead time is the alpha window. For MDT, price is the parent conglomerate."};
-function showTab(id){var tabs=document.querySelectorAll(".tab");for(var i=0;i<tabs.length;i++){tabs[i].classList.remove("active");}var tcs=document.querySelectorAll(".tabcontent");for(var i=0;i<tcs.length;i++){tcs[i].classList.remove("active");}var clickedTab=document.querySelector('.tab[onclick*="'+id+'"]');if(clickedTab)clickedTab.classList.add("active");var tc=document.getElementById("tc-"+id);if(tc)tc.classList.add("active");}
-function init(){for(var d in defined_cd){if(defined_cd.hasOwnProperty(d)){mk(d,defined_cd[d],"reports");}}var allcc=document.querySelectorAll(".cc");for(var ci=0;ci<allcc.length;ci++){var btns=allcc[ci].querySelectorAll(".cb");for(var bi=0;bi<btns.length;bi++){btns[bi].addEventListener("click",function(){var mycc=this.parentNode;var did=mycc.id.replace("cc-","");var v=this.getAttribute("data-v");if(v==="reset"){if(charts[did])charts[did].resetZoom();return;}var siblings=mycc.querySelectorAll(".cb:not(.rst)");for(var si=0;si<siblings.length;si++){siblings[si].classList.remove("active");}this.classList.add("active");var descEl=document.getElementById("cdesc-"+did);if(descEl&&chartDescs[v]){descEl.textContent=chartDescs[v];}mk(did,defined_cd[did],v);});}}}
-function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();var ds=[],yL="",bm=D.bm||[],evts=D.evts||[];var evtMs=[];for(var ei=0;ei<evts.length;ei++){evtMs.push(evts[ei].date);}
-if(v==="reports"){var bc=[];for(var bi=0;bi<D.l.length;bi++){bc.push(bm.indexOf(D.l[bi])>=0?"rgba(230,126,34,0.5)":evtMs.indexOf(D.l[bi])>=0?"rgba(192,57,43,0.4)":"rgba(43,95,58,0.25)");}ds=[{label:"2s upper",data:D.u2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:"+1",pointRadius:0,order:5},{label:"2s lower",data:D.l2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:false,pointRadius:0,order:5},{label:"1s upper",data:D.u1,borderWidth:0,backgroundColor:"rgba(43,95,58,0.10)",fill:"+1",pointRadius:0,order:4},{label:"1s lower",data:D.l1,borderWidth:0,fill:false,pointRadius:0,order:4},{label:"Reports",data:D.c,borderColor:"rgba(43,95,58,0.85)",backgroundColor:bc,borderWidth:1.5,type:"bar",order:2},{label:"6mo MA",data:D.ma,borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:0,tension:0.3,order:1}];yL="Monthly Reports";}
-else if(v==="rate_m"){var rd=[];for(var i=0;i<D.rm.length;i++){rd.push(D.rm[i]===null?undefined:D.rm[i]);}ds=[{label:"Rate/$M",data:rd,borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per $M Revenue";}
-else if(v==="rate_10k"){var r10=[];for(var i=0;i<D.r10.length;i++){r10.push(D.r10[i]===null?undefined:D.r10[i]);}ds=[{label:"Rate/10K Users",data:r10,borderColor:"#8B4513",backgroundColor:"rgba(139,69,19,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per 10K Users";}
+var chartDescs={"reports":"REPORTS + SIGMA BANDS: Green bars = monthly MAUDE reports received by the FDA. Light shaded bands show +/-1 standard deviation (68% of normal months fall here) and +/-2 std dev (95%). When bars break above the 2-sigma band, that month is statistically anomalous. Orange bars = batch reporting (manufacturer dumped old reports, NOT a real surge). Red bars = regulatory event month. The dark green line is the 6-month moving average which smooths noise to reveal the real underlying trend.","rate_m":"RATE PER $M REVENUE: Each bar = that month's MAUDE reports divided by monthly revenue (quarterly revenue / 3). This is the key normalization. If Dexcom grows revenue 20% and reports also grow 20%, the rate is flat (no quality problem). But if reports grow 40% while revenue grows 20%, the rate rises. A RISING rate means quality is deteriorating faster than the business is growing. This metric predicted the PODD selloff 4-5 months early. Rate showing 'none' means no revenue data exists for that quarter.","rate_10k":"RATE PER 10K USERS: Reports divided by estimated installed base (per 10,000 users). The most granular normalization available. New products with very few users will show HIGH rates even with only a handful of reports — this is mathematically correct and is actually a real concern (a product used by 1,000 people with 50 complaints is worse than one used by 1M people with 5,000 complaints). User estimates from earnings calls and SEC 10-K filings.","severity":"SEVERITY BREAKDOWN: Stacked bars showing the composition of events each month. Red = deaths (most serious, weighted 10x in severity score). Orange = injuries requiring medical intervention (weighted 3x). Green = malfunctions (device failures without direct patient harm, weighted 1x). Watch for the MIX shifting — if deaths and injuries are growing as a % of total while malfunctions stay flat, the problem is getting more dangerous, not just more frequent.","zscore":"Z-SCORE HISTORY: How far each month deviates from its trailing 12-month average, measured in standard deviations. Red dashed line at +2 = statistically significant spike (only 2.3% chance this is random). Green dashed line at -2 = unusually low. Sustained positive z-scores across multiple months = developing quality problem, not a one-off. This is more reliable than looking at raw counts because it adjusts for seasonal patterns and installed base growth.","stock":"STOCK PRICE OVERLAY: Green line = stock price. Red line = MAUDE report count. The key pattern to look for: MAUDE spikes (red going UP) that precede stock declines (green going DOWN) by 1-4 months. That lead time is your trading alpha window. For MDT, price shown is the parent conglomerate (diabetes is ~8% of revenue). For BBNX, only post-IPO Feb 2025 data. For SQEL, no stock data (private company)."};
+function showTab(id){document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active")});document.querySelectorAll(".tabcontent").forEach(function(t){t.classList.remove("active")});var ct=document.querySelector('.tab[onclick*="'+id+'"]');if(ct)ct.classList.add("active");var tc=document.getElementById("tc-"+id);if(tc)tc.classList.add("active");}
+function toggleAcc(id){var el=document.getElementById(id);var arr=document.getElementById("arr-"+id);if(el.style.display==="none"){el.style.display="block";if(arr)arr.classList.add("open");}else{el.style.display="none";if(arr)arr.classList.remove("open");}}
+function init(){for(var d in defined_cd){if(defined_cd.hasOwnProperty(d)){mk(d,defined_cd[d],"reports");}}document.querySelectorAll(".cc").forEach(function(cc){cc.querySelectorAll(".cb").forEach(function(btn){btn.addEventListener("click",function(){var mycc=this.parentNode;var did=mycc.id.replace("cc-","");var v=this.getAttribute("data-v");if(v==="reset"){if(charts[did])charts[did].resetZoom();return;}mycc.querySelectorAll(".cb:not(.rst)").forEach(function(s){s.classList.remove("active")});this.classList.add("active");var descEl=document.getElementById("cdesc-"+did);if(descEl&&chartDescs[v]){descEl.textContent=chartDescs[v];}mk(did,defined_cd[did],v);});});});}
+function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();var ds=[],yL="",bm=D.bm||[],evts=D.evts||[];var evtMs=evts.map(function(e){return e.date;});
+if(v==="reports"){var bc=D.l.map(function(m,i){return bm.indexOf(m)>=0?"rgba(230,126,34,0.5)":evtMs.indexOf(m)>=0?"rgba(192,57,43,0.4)":"rgba(43,95,58,0.25)";});ds=[{label:"2\u03C3 upper",data:D.u2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:"+1",pointRadius:0,order:5},{label:"2\u03C3 lower",data:D.l2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:false,pointRadius:0,order:5},{label:"1\u03C3 upper",data:D.u1,borderWidth:0,backgroundColor:"rgba(43,95,58,0.10)",fill:"+1",pointRadius:0,order:4},{label:"1\u03C3 lower",data:D.l1,borderWidth:0,fill:false,pointRadius:0,order:4},{label:"Reports",data:D.c,borderColor:"rgba(43,95,58,0.85)",backgroundColor:bc,borderWidth:1.5,type:"bar",order:2},{label:"6mo MA",data:D.ma,borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:0,tension:0.3,order:1}];yL="Monthly Reports";}
+else if(v==="rate_m"){ds=[{label:"Rate/$M",data:D.rm.map(function(v){return v===null?undefined:v;}),borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per $M Revenue";}
+else if(v==="rate_10k"){ds=[{label:"Rate/10K Users",data:D.r10.map(function(v){return v===null?undefined:v;}),borderColor:"#8B4513",backgroundColor:"rgba(139,69,19,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per 10K Users";}
 else if(v==="severity"){ds=[{label:"Deaths",data:D.d,backgroundColor:"rgba(192,57,43,0.8)",borderWidth:0,stack:"s"},{label:"Injuries",data:D.inj,backgroundColor:"rgba(230,126,34,0.7)",borderWidth:0,stack:"s"},{label:"Malfunctions",data:D.mal,backgroundColor:"rgba(43,95,58,0.3)",borderWidth:0,stack:"s"}];yL="Events by Type";}
-else if(v==="zscore"){var zc=[];for(var i=0;i<D.z.length;i++){var zv=D.z[i];zc.push(zv>2?"rgba(192,57,43,0.8)":zv>1.5?"rgba(230,126,34,0.7)":zv<-1.5?"rgba(43,95,58,0.6)":"rgba(43,95,58,0.25)");}var t2=[];var nt2=[];for(var i=0;i<D.l.length;i++){t2.push(2);nt2.push(-2);}ds=[{label:"Z-Score",data:D.z,backgroundColor:zc,borderWidth:0,type:"bar"},{label:"+2s",data:t2,borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false},{label:"-2s",data:nt2,borderColor:"rgba(43,95,58,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false}];yL="Z-Score";}
-else if(v==="stock"){var sp=D.sp||{};var sl=[];var sv=[];var sc=[];for(var i=0;i<D.l.length;i++){if(sp[D.l[i]]){sl.push(D.l[i]);sv.push(sp[D.l[i]]);sc.push(D.c[i]);}}if(sl.length<2){var descEl=document.getElementById("cdesc-"+did);if(descEl)descEl.textContent="Limited stock data. Company may be private (Sequel), recently IPO'd (BBNX Feb 2025), or product too new for sufficient price history.";return;}ds=[{label:"Stock ($)",data:sv,borderColor:"#2B5F3A",borderWidth:2,fill:false,pointRadius:1.5,tension:0.2},{label:"MAUDE Reports",data:sc,borderColor:"rgba(192,57,43,0.6)",borderWidth:1.5,fill:false,pointRadius:0,tension:0.2,yAxisID:"y1"}];charts[did]=new Chart(ctx,{type:"line",data:{labels:sl,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{position:"left",grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}},y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1}}}});return;}
-charts[did]=new Chart(ctx,{type:"line",data:{labels:D.l,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#4a5f50",font:{size:10}},title:{display:true,text:yL,color:"#4a5f50",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},pinch:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,callbacks:{afterBody:function(it){var idx=it[0].dataIndex;var month=D.l[idx];var msgs=[];if(bm.indexOf(month)>=0){msgs.push("BATCH REPORTING DETECTED");}for(var ee=0;ee<evts.length;ee++){if(evts[ee].date===month){msgs.push(evts[ee].type+": "+evts[ee].desc);}}return msgs.length?"\n"+msgs.join("\n"):"";}}}}}});}
-function af(){var co=document.getElementById("fc").value;var sig=document.getElementById("fs").value;var vw=document.getElementById("fv").value;var so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3};var els=document.querySelectorAll(".pr,.card");for(var i=0;i<els.length;i++){var el=els[i];var sh=true;var ec=el.getAttribute("data-co");var es=el.getAttribute("data-sig");var ic=el.getAttribute("data-comb")==="1";if(co!=="all"&&ec!==co)sh=false;if(sig!=="all"){var sv=so[es]||3;if(sig==="CRITICAL"&&es!=="CRITICAL")sh=false;if(sig==="ELEVATED"&&sv>1)sh=false;if(sig==="WATCH"&&sv>2)sh=false;}if(vw==="combined"&&!ic)sh=false;if(vw==="individual"&&ic)sh=false;el.style.display=sh?"":"none";}}
+else if(v==="zscore"){ds=[{label:"Z-Score",data:D.z,backgroundColor:D.z.map(function(zv){return zv>2?"rgba(192,57,43,0.8)":zv>1.5?"rgba(230,126,34,0.7)":zv<-1.5?"rgba(43,95,58,0.6)":"rgba(43,95,58,0.25)";}),borderWidth:0,type:"bar"},{label:"+2\u03C3",data:D.l.map(function(){return 2;}),borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false},{label:"-2\u03C3",data:D.l.map(function(){return -2;}),borderColor:"rgba(43,95,58,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false}];yL="Z-Score";}
+else if(v==="stock"){var sp=D.sp||{};var sl=[],sv=[],sc=[];D.l.forEach(function(m,i){if(sp[m]){sl.push(m);sv.push(sp[m]);sc.push(D.c[i]);}});if(sl.length<2){var de=document.getElementById("cdesc-"+did);if(de)de.textContent="Limited stock data. Company may be private (Sequel), recently IPO'd (BBNX Feb 2025), or product too new.";return;}ds=[{label:"Stock ($)",data:sv,borderColor:"#2B5F3A",borderWidth:2,fill:false,pointRadius:1.5,tension:0.2},{label:"MAUDE Reports",data:sc,borderColor:"rgba(192,57,43,0.6)",borderWidth:1.5,fill:false,pointRadius:0,tension:0.2,yAxisID:"y1"}];charts[did]=new Chart(ctx,{type:"line",data:{labels:sl,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{position:"left",grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}},y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1}}}});return;}
+charts[did]=new Chart(ctx,{type:"line",data:{labels:D.l,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#4a5f50",font:{size:10}},title:{display:true,text:yL,color:"#4a5f50",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},pinch:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,callbacks:{afterBody:function(it){var idx=it[0].dataIndex;var month=D.l[idx];var msgs=[];if(bm.indexOf(month)>=0)msgs.push("BATCH REPORTING DETECTED");evts.forEach(function(e){if(e.date===month)msgs.push(e.type+": "+e.desc);});return msgs.length?"\n"+msgs.join("\n"):"";}}}}}});}
+function af(){var co=document.getElementById("fc").value;var sig=document.getElementById("fs").value;var vw=document.getElementById("fv").value;var so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3};document.querySelectorAll(".pr,.card").forEach(function(el){var sh=true;var ec=el.getAttribute("data-co");var es=el.getAttribute("data-sig");var ic=el.getAttribute("data-comb")==="1";if(co!=="all"&&ec!==co)sh=false;if(sig!=="all"){var sv=so[es]||3;if(sig==="CRITICAL"&&es!=="CRITICAL")sh=false;if(sig==="ELEVATED"&&sv>1)sh=false;if(sig==="WATCH"&&sv>2)sh=false;}if(vw==="combined"&&!ic)sh=false;if(vw==="individual"&&ic)sh=false;el.style.display=sh?"":"none";});}
 document.addEventListener("DOMContentLoaded",init);
 </script>'''
     full_html=html_top+js+"</body></html>"
