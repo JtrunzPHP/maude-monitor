@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install dependencies
+        run: pip install pytrends
+
       - name: Create data directories
         run: mkdir -p data docs
 
