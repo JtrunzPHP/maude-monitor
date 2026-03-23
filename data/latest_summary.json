@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-23T12:43:46.063900",
+  "generated": "2026-03-23T14:18:47.028509",
   "devices": [
     {
       "id": "DXCM_G7_15DAY",
@@ -16,7 +16,10 @@
       "injuries_3mo": 7,
       "r_score": null,
       "signal": "NORMAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": null,
+      "corr_p": null,
+      "corr_sig": null
     },
     {
       "id": "DXCM_G7",
@@ -33,7 +36,10 @@
       "injuries_3mo": 1382,
       "r_score": 84.8,
       "signal": "CRITICAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "DXCM_G6",
@@ -50,7 +56,10 @@
       "injuries_3mo": 275,
       "r_score": 12.2,
       "signal": "NORMAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": 0.3997,
+      "corr_p": 0.021179,
+      "corr_sig": true
     },
     {
       "id": "DXCM_STELO",
@@ -67,7 +76,10 @@
       "injuries_3mo": 27,
       "r_score": 0.8,
       "signal": "NORMAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "DXCM_ONE",
@@ -84,7 +96,10 @@
       "injuries_3mo": 0,
       "r_score": 12.0,
       "signal": "NORMAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": -0.3355,
+      "corr_p": 0.048836,
+      "corr_sig": true
     },
     {
       "id": "DXCM_ALL",
@@ -101,7 +116,10 @@
       "injuries_3mo": 1671,
       "r_score": 72.1,
       "signal": "CRITICAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "PODD_OP5",
@@ -118,7 +136,10 @@
       "injuries_3mo": 1527,
       "r_score": 5.2,
       "signal": "NORMAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": 0.7517,
+      "corr_p": 0.0,
+      "corr_sig": true
     },
     {
       "id": "PODD_DASH",
@@ -135,7 +156,10 @@
       "injuries_3mo": 72,
       "r_score": 6.2,
       "signal": "NORMAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "PODD_ALL",
@@ -152,7 +176,10 @@
       "injuries_3mo": 1605,
       "r_score": 3.7,
       "signal": "NORMAL",
-      "batch_warning": true
+      "batch": true,
+      "corr_rho": 0.7273,
+      "corr_p": 2e-06,
+      "corr_sig": true
     },
     {
       "id": "TNDM_TSLIM",
@@ -169,7 +196,10 @@
       "injuries_3mo": 4758,
       "r_score": 10.5,
       "signal": "NORMAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "TNDM_MOBI",
@@ -186,7 +216,10 @@
       "injuries_3mo": 1633,
       "r_score": 6.8,
       "signal": "NORMAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "TNDM_ALL",
@@ -203,11 +236,14 @@
       "injuries_3mo": 1646,
       "r_score": 6.8,
       "signal": "NORMAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0.3691,
+      "corr_p": 0.044729,
+      "corr_sig": true
     },
     {
       "id": "ABT_LIBRE3",
-      "name": "FreeStyle Libre 3/3 Plus",
+      "name": "FreeStyle Libre 3/3+",
       "ticker": "ABT_LIBRE",
       "company": "Abbott",
       "month": "2026-02",
@@ -220,7 +256,10 @@
       "injuries_3mo": 1867,
       "r_score": 81.7,
       "signal": "CRITICAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0,
+      "corr_p": 1.0,
+      "corr_sig": false
     },
     {
       "id": "ABT_LIBRE2",
@@ -237,11 +276,14 @@
       "injuries_3mo": 865,
       "r_score": 3.0,
       "signal": "NORMAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0.3433,
+      "corr_p": 0.063288,
+      "corr_sig": false
     },
     {
       "id": "ABT_LIBRE_ALL",
-      "name": "All FreeStyle Libre (combined)",
+      "name": "All FreeStyle Libre",
       "ticker": "ABT_LIBRE",
       "company": "Abbott",
       "month": "2026-02",
@@ -254,7 +296,10 @@
       "injuries_3mo": 2850,
       "r_score": 76.1,
       "signal": "CRITICAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": 0.3673,
+      "corr_p": 0.045858,
+      "corr_sig": true
     },
     {
       "id": "SQEL_TWIIST",
@@ -271,7 +316,10 @@
       "injuries_3mo": 19,
       "r_score": 72.9,
       "signal": "CRITICAL",
-      "batch_warning": false
+      "batch": false,
+      "corr_rho": null,
+      "corr_p": null,
+      "corr_sig": null
     }
   ]
 }
