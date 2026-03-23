@@ -1,8 +1,8 @@
 name: MAUDE Monitor
 on:
 schedule:
-- cron: '0 12 * * *'  # Daily at 12:00 UTC (~7-8 AM ET)
-workflow_dispatch:  # Manual trigger
+- cron: '0 12 * * *'
+workflow_dispatch:
 env:
 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 permissions:
@@ -11,57 +11,52 @@ pages: write
 jobs:
 monitor:
 runs-on: ubuntu-latest
-timeout-minutes: 30  # Increased for enhanced modules
+timeout-minutes: 30
 steps:
-  - name: Checkout repo
-    uses: actions/checkout@v4
-
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.12'
-
-  - name: Create data directories
-    run: mkdir -p data docs
-
-  - name: Verify module files exist
-    run: |
-      echo "=== Files in repo ==="
-      ls -la *.py
-      echo ""
-      echo "=== Running stats self-test ==="
-      python -c "
-      try:
-          from stats_engine import _self_test
-          result = _self_test()
-          if not result:
-              print('WARNING: Stats self-test had failures')
-          else:
-              print('Stats engine verified OK')
-      except ImportError:
-          print('stats_engine.py not found - will run in basic mode')
-      "
-      echo ""
-      echo "=== Checking data_modules ==="
-      python -c "
-      try:
-          import data_modules
-          print('data_modules.py loaded OK')
-      except ImportError:
-          print('data_modules.py not found - will run in basic mode')
-      "
-
-  - name: Run MAUDE Monitor
-    env:
-      MAUDE_EMAIL_TO: ${{ secrets.MAUDE_EMAIL_TO }}
-      MAUDE_EMAIL_FROM: ${{ secrets.MAUDE_EMAIL_FROM }}
-      MAUDE_SMTP_PASSWORD: ${{ secrets.MAUDE_SMTP_PASSWORD }}
-    run: python maude_monitor.py --html
-
-  - name: Commit updated data
-    run: |
-      git config user.name "MAUDE Bot"
-      git config user.email "maude-bot@users.noreply.github.com"
-      git add data/ docs/
-      git diff --cached --quiet || git commit -m "Update MAUDE data $(date +%Y-%m-%d)"
-      git push
+- name: Checkout repo
+uses: actions/checkout@v4
+- name: Set up Python
+uses: actions/setup-python@v5
+with:
+python-version: '3.12'
+- name: Create data directories
+run: mkdir -p data docs
+- name: Verify module files exist
+run: |
+echo "=== Files in repo ==="
+ls -la *.py
+echo ""
+echo "=== Running stats self-test ==="
+python -c "
+try:
+from stats_engine import _self_test
+result = _self_test()
+if not result:
+print('WARNING: Stats self-test had failures')
+else:
+print('Stats engine verified OK')
+except ImportError:
+print('stats_engine.py not found - will run in basic mode')
+"
+echo ""
+echo "=== Checking data_modules ==="
+python -c "
+try:
+import data_modules
+print('data_modules.py loaded OK')
+except ImportError:
+print('data_modules.py not found - will run in basic mode')
+"
+- name: Run MAUDE Monitor
+env:
+MAUDE_EMAIL_TO: ${{ secrets.MAUDE_EMAIL_TO }}
+MAUDE_EMAIL_FROM: ${{ secrets.MAUDE_EMAIL_FROM }}
+MAUDE_SMTP_PASSWORD: ${{ secrets.MAUDE_SMTP_PASSWORD }}
+run: python maude_monitor.py --html
+- name: Commit updated data
+run: |
+git config user.name "MAUDE Bot"
+git config user.email "maude-bot@users.noreply.github.com"
+git add data/ docs/
+git diff --cached --quiet || git commit -m "Update MAUDE data $(date +%Y-%m-%d)"
+git push
