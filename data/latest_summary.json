@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-23T14:54:24.669260",
+  "generated": "2026-03-23T15:13:23.679232",
   "devices": [
     {
       "id": "DXCM_G7_15DAY",
@@ -345,22 +345,22 @@
     },
     {
       "id": "MDT_DM_ALL",
-      "name": "All Medtronic Diabetes",
+      "name": "All MDT Diabetes",
       "ticker": "MDT_DM",
       "company": "Medtronic",
       "month": "2026-02",
-      "reports": 1,
-      "z_score": -0.69,
-      "rate_per_m": 0.0,
-      "rate_per_10k": 0.0115,
-      "slope_6m": 0.14,
+      "reports": 323,
+      "z_score": 2.78,
+      "rate_per_m": 1.21,
+      "rate_per_10k": 3.7126,
+      "slope_6m": 24.11,
       "deaths_3mo": 0,
-      "injuries_3mo": 3,
-      "r_score": 70.2,
+      "injuries_3mo": 16,
+      "r_score": 98.5,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": null,
-      "corr_sig": null
+      "corr_rho": 0,
+      "corr_sig": false
     },
     {
       "id": "SQEL_TWIIST",
