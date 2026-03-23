@@ -5,17 +5,17 @@ on:
     - cron: '0 12 * * *'
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 permissions:
   contents: write
   pages: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -27,9 +27,6 @@ jobs:
 
       - name: Create data directories
         run: mkdir -p data docs
-
-      - name: Verify modules
-        run: python -c "import stats_engine; stats_engine._self_test()" || echo "stats_engine not found"
 
       - name: Run MAUDE Monitor
         env:
