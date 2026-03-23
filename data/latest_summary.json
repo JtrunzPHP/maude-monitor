@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-23T15:30:09.955105",
+  "generated": "2026-03-23T17:02:33.557555",
   "devices": [
     {
       "id": "DXCM_G7_15DAY",
@@ -36,7 +36,7 @@
       "r_score": 84.8,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": 0,
+      "corr_rho": 0.1915,
       "corr_sig": false
     },
     {
@@ -55,7 +55,7 @@
       "r_score": 12.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.3308,
+      "corr_rho": -0.221,
       "corr_sig": false
     },
     {
@@ -74,7 +74,7 @@
       "r_score": 0.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0,
+      "corr_rho": -0.3039,
       "corr_sig": false
     },
     {
@@ -93,7 +93,7 @@
       "r_score": 12.0,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": -0.2929,
+      "corr_rho": -0.2167,
       "corr_sig": false
     },
     {
@@ -112,7 +112,7 @@
       "r_score": 72.1,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": 0,
+      "corr_rho": -0.312,
       "corr_sig": false
     },
     {
@@ -131,8 +131,8 @@
       "r_score": 5.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.705,
-      "corr_sig": true
+      "corr_rho": 0.4897,
+      "corr_sig": false
     },
     {
       "id": "PODD_DASH",
@@ -150,7 +150,7 @@
       "r_score": 6.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0,
+      "corr_rho": -0.2598,
       "corr_sig": false
     },
     {
@@ -169,8 +169,8 @@
       "r_score": 3.7,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.6835,
-      "corr_sig": true
+      "corr_rho": 0.567,
+      "corr_sig": false
     },
     {
       "id": "TNDM_TSLIM",
@@ -188,7 +188,7 @@
       "r_score": 10.5,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0,
+      "corr_rho": -0.2467,
       "corr_sig": false
     },
     {
@@ -207,7 +207,7 @@
       "r_score": 6.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": -0.3568,
+      "corr_rho": 0.2468,
       "corr_sig": false
     },
     {
@@ -226,7 +226,7 @@
       "r_score": 6.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0.3399,
+      "corr_rho": 0.431,
       "corr_sig": false
     },
     {
@@ -245,7 +245,7 @@
       "r_score": 81.7,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0,
+      "corr_rho": 0.2069,
       "corr_sig": false
     },
     {
@@ -264,7 +264,7 @@
       "r_score": 3.0,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0.3222,
+      "corr_rho": -0.2838,
       "corr_sig": false
     },
     {
@@ -283,8 +283,8 @@
       "r_score": 76.1,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0.3563,
-      "corr_sig": true
+      "corr_rho": 0.2464,
+      "corr_sig": false
     },
     {
       "id": "BBNX_ILET",
@@ -302,8 +302,8 @@
       "r_score": 91.1,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": 0,
-      "corr_sig": false
+      "corr_rho": -0.8929,
+      "corr_sig": true
     },
     {
       "id": "BBNX_ALL",
@@ -321,8 +321,8 @@
       "r_score": 91.1,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": 0,
-      "corr_sig": false
+      "corr_rho": -0.8929,
+      "corr_sig": true
     },
     {
       "id": "MDT_SIMPLERA",
@@ -340,7 +340,7 @@
       "r_score": 98.5,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0,
+      "corr_rho": -0.3298,
       "corr_sig": false
     },
     {
@@ -359,7 +359,7 @@
       "r_score": 98.5,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0,
+      "corr_rho": -0.3298,
       "corr_sig": false
     },
     {
