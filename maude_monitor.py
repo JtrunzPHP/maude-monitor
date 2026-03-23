@@ -10,7 +10,10 @@ from urllib.error import HTTPError,URLError
 
 try:
     from stats_engine import compute_enhanced_correlation, _self_test as stats_selftest
-    from data_modules import (analyze_failure_modes, analyze_reddit_sentiment, analyze_edgar_filings, analyze_international)
+    from data_modules import (analyze_failure_modes, analyze_edgar_filings, analyze_international,
+        analyze_google_trends, analyze_insider_trading, analyze_clinical_trials,
+        analyze_short_interest, analyze_payer_coverage, compute_recall_probability,
+        compute_peer_relative, predict_earnings_surprise, backtest_r_score)
     HAS_MODULES = True
 except ImportError:
     HAS_MODULES = False
@@ -211,6 +214,25 @@ def run_pipeline(backfill=False,quick=False):
             summary.append({"id":did,"name":dev["name"],"ticker":dev["ticker"],"company":dev["company"],"month":lt["month"],"reports":lt["count"],"z_score":lt["z_score"],"rate_per_m":lt["rate_per_m"],"rate_per_10k":lt["rate_per_10k"],"slope_6m":lt["slope_6m"],"deaths_3mo":sum(s["deaths"] for s in stats[-3:]),"injuries_3mo":sum(s["injuries"] for s in stats[-3:]),"r_score":rscore["total"] if rscore else None,"signal":rscore["signal"] if rscore else "NORMAL","batch":batch.get(lt["month"],{}).get("is_batch",False),"corr_rho":ec["best_rho"] if ec else None,"corr_sig":ec["significant"] if ec else None})
             print(f"  {lt['month']} | {lt['count']:,} | Z:{lt['z_score']:+.2f} | R:{rscore['total'] if rscore else '-'}")
     os.makedirs("data",exist_ok=True)
+    # Post-loop computations: peer-relative, earnings, backtest
+    if HAS_MODULES:
+        # Peer-relative scoring
+        company_r_scores={}
+        for did,r in all_res.items():
+            if did.endswith("_ALL") and r["r_score"]: company_r_scores[r["device"]["ticker"]]=r["r_score"]["total"]
+        peer_rel=compute_peer_relative(company_r_scores)
+        # Attach to each result + compute earnings + backtest
+        for did,r in all_res.items():
+            tk=r["device"]["ticker"]
+            r["peer_relative"]=peer_rel.get(tk)
+            if r["r_score"] and r["stats"]:
+                try: r["earnings_pred"]=predict_earnings_surprise(r["stats"],r["r_score"],peer_rel.get(tk))
+                except: r["earnings_pred"]=None
+            else: r["earnings_pred"]=None
+            if did.endswith("_ALL") and r["stats"]:
+                try: r["backtest"]=backtest_r_score(r["stats"],STOCK_MONTHLY.get(tk,{}),threshold=50)
+                except: r["backtest"]=None
+            else: r["backtest"]=None
     for did,r in all_res.items():
         if r["stats"]:
             with open(f"data/{did}_monthly.csv","w",newline="") as f:
@@ -360,7 +382,9 @@ td{{padding:7px 10px;border-bottom:1px solid var(--bd);font-size:12px;white-spac
 .rci{{text-align:center;padding:3px;background:var(--bg2);border-radius:4px;border:1px solid var(--bd);font-size:8px;color:var(--tx3)}}
 .rcv{{display:block;font-size:12px;font-weight:700;color:var(--tx)}}
 .mbox{{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:8px}}
-.msub{{font-size:11px;color:var(--tx2);margin-top:3px}}
+.msub{{font-size:11px;color:var(--tx2);margin-top:3px;line-height:1.5}}
+.mstat{{font-size:9px;font-weight:700;text-transform:uppercase;padding:1px 5px;border-radius:3px;margin-left:4px}}
+.mok{{background:var(--gx);color:var(--g)}}.mwarn{{background:#fef3e0;color:#b8860b}}.merr{{background:#fdecea;color:var(--red)}}
 .fmr{{display:flex;align-items:center;gap:6px;margin-bottom:2px}}.fml{{width:130px;font-size:10px;color:var(--tx2)}}
 .fmb{{flex:1;height:10px;background:var(--bg3);border-radius:3px;overflow:hidden}}.fmb div{{height:100%;border-radius:3px}}
 .fmp{{width:36px;text-align:right;font-weight:600;font-size:11px}}
