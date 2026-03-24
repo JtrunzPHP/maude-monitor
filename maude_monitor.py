@@ -589,6 +589,357 @@ def backtest_r_score(stats, stock_prices, threshold=50):
         return {"status":"error","message":str(e)[:200]}
 
 # ============================================================
+# V3.2 BLOCK 1 — NEW DEVICES + FUNCTIONS
+# ============================================================
+# PASTE THIS at the bottom of Part 1, right ABOVE the line:
+#   # END OF PART 1 — Part 2 continues with run_pipeline, generate_html, main
+# ============================================================
+
+# --- Add these 3 companies to the COMPANIES list ---
+for _co in ["Procept BioRobotics","Inspire Medical Systems","CVRx"]:
+    if _co not in COMPANIES: COMPANIES.append(_co)
+
+# --- Add these 3 devices to the DEVICES list ---
+DEVICES.extend([
+    {"id":"PRCT_AQUABEAM","name":"AquaBeam Robotic System","ticker":"PRCT","company":"Procept BioRobotics",
+     "search":'device.brand_name:aquabeam',
+     "description":"Nasdaq: PRCT. Aquablation therapy for BPH. IPO Sep 2021. Class 2 recalls 2022 & 2025.",
+     "case_study":True},
+    {"id":"INSP_INSPIRE","name":"Inspire Sleep System","ticker":"INSP","company":"Inspire Medical Systems",
+     "search":'device.brand_name:inspire AND device.generic_name:hypoglossal',
+     "description":"NYSE: INSP. Hypoglossal nerve stimulator for OSA. Class I recall Jun 2024. -82pct from ATH.",
+     "case_study":True},
+    {"id":"CVRX_BAROSTIM","name":"Barostim System","ticker":"CVRX","company":"CVRx",
+     "search":'device.brand_name:barostim',
+     "description":"Nasdaq: CVRX. Neuromodulation for heart failure. Breakthrough Device. DRG 276 Oct 2024.",
+     "case_study":True},
+])
+
+# ============================================================
+# BATCH SMOOTHING ENGINE
+# Tests SMA & EWMA at windows 3,4,5 months
+# Uses date_of_event as ground truth, picks best fit automatically
+# ============================================================
+def smooth_batch_data(recv, evnt):
+    """Smooths batch-reported MAUDE data by testing 6 methods (SMA-3/4/5 + EWMA-3/4/5).
+    Compares each against date_of_event distribution to find best alignment.
+    Returns dict: smoothed data, method name, window, raw data, fit correlation."""
+    if not recv or len(recv) < 4:
+        return {"smoothed":dict(recv) if recv else {},"method":"none","window":0,
+                "raw":dict(recv) if recv else {},"fit_corr":0.0}
+    months = sorted(set(list(recv.keys()) + list((evnt or {}).keys())))
+    r = [recv.get(m, 0) for m in months]
+    e = [(evnt or {}).get(m, 0) for m in months]
+
+    def _corr(a, b):
+        n = min(len(a), len(b))
+        if n < 3: return 0.0
+        ma, mb = sum(a[:n])/n, sum(b[:n])/n
+        num = sum((a[i]-ma)*(b[i]-mb) for i in range(n))
+        da = sum((a[i]-ma)**2 for i in range(n))**0.5
+        db = sum((b[i]-mb)**2 for i in range(n))**0.5
+        return num/(da*db) if da*db > 0 else 0.0
+
+    base_corr = _corr(r, e)
+    best = {"c":base_corr,"m":"raw","w":0,
+            "d":{m:recv.get(m,0) for m in months}}
+
+    for w in [3, 4, 5]:
+        # Simple Moving Average
+        sma = []
+        for i in range(len(r)):
+            s = max(0, i-w+1)
+            sma.append(sum(r[s:i+1])/(i-s+1))
+        c = _corr(sma, e)
+        if c > best["c"]:
+            best = {"c":c,"m":"SMA","w":w,
+                    "d":{months[i]:round(sma[i]) for i in range(len(months))}}
+
+        # Exponentially Weighted Moving Average
+        alpha = 2.0/(w+1)
+        ew = [float(r[0])]
+        for i in range(1, len(r)):
+            ew.append(alpha*r[i] + (1.0-alpha)*ew[-1])
+        c = _corr(ew, e)
+        if c > best["c"]:
+            best = {"c":c,"m":"EWMA","w":w,
+                    "d":{months[i]:round(ew[i]) for i in range(len(months))}}
+
+    return {"smoothed":best["d"],"method":best["m"],"window":best["w"],
+            "raw":recv,"fit_corr":round(best["c"],3)}
+
+
+# ============================================================
+# CASE STUDY EVENT ANNOTATIONS (key dates for each ticker)
+# ============================================================
+CASE_STUDY_EVENTS = {
+    "PRCT": [
+        {"date":"2021-09","type":"IPO","desc":"IPO at ~$25/share"},
+        {"date":"2022-05","type":"RECALL","desc":"Class 2 Recall - AquaBeam system"},
+        {"date":"2024-12","type":"PEAK","desc":"Stock peaks ~$100"},
+        {"date":"2025-10","type":"RECALL","desc":"Class 2 Recall - AquaBeam Handpiece"},
+        {"date":"2026-01","type":"LEGAL","desc":"Securities fraud investigations launched"},
+    ],
+    "INSP": [
+        {"date":"2023-07","type":"PEAK","desc":"Stock peaks ~$326 (ATH)"},
+        {"date":"2024-06","type":"RECALL","desc":"Class I Recall - Inspire IV IPG 3028 (mfg defect)"},
+        {"date":"2024-07","type":"FDA","desc":"FDA labels recall most serious type"},
+        {"date":"2025-08","type":"CRASH","desc":"Inspire V launch failure, -$42 stock drop"},
+        {"date":"2025-12","type":"LEGAL","desc":"Securities fraud lawsuit filed"},
+    ],
+    "CVRX": [
+        {"date":"2024-01","type":"MGMT","desc":"CEO Yared retires, Hykes appointed"},
+        {"date":"2024-10","type":"REIMB","desc":"MS-DRG 276 reassignment (~$43K payment)"},
+        {"date":"2025-02","type":"DATA","desc":"Real-world evidence at THT 2025"},
+        {"date":"2025-05","type":"EARN","desc":"Q1 2025: revenue miss, seasonal softness"},
+        {"date":"2026-01","type":"REIMB","desc":"Category I CPT codes effective"},
+    ],
+}
+CASE_STUDY_TICKER_MAP = {
+    "PRCT_AQUABEAM":"PRCT","INSP_INSPIRE":"INSP","CVRX_BAROSTIM":"CVRX",
+}
+
+
+# ============================================================
+# MONTHLY STOCK PRICE RETRIEVAL (for case studies, uses yfinance)
+# ============================================================
+def get_monthly_stock(ticker, start="20200101"):
+    """Fetch monthly closing stock prices via yfinance. Returns {YYYY-MM: price}."""
+    try:
+        import yfinance as yf
+        tk = ticker.split("_")[0]
+        start_str = f"{start[:4]}-{start[4:6]}-{start[6:8]}"
+        df = yf.download(tk, start=start_str, interval="1mo", progress=False)
+        if df.empty: return {}
+        result = {}
+        for idx, row in df.iterrows():
+            ym = idx.strftime("%Y-%m")
+            cv = row["Close"]
+            if hasattr(cv,'iloc'): cv = cv.iloc[0]
+            result[ym] = round(float(cv), 2)
+        return result
+    except Exception as ex:
+        print(f"  [WARN] get_monthly_stock({ticker}): {ex}")
+        return {}
+
+
+# ============================================================
+# CASE STUDY LEAD-LAG CORRELATION ENGINE
+# ============================================================
+def compute_case_study(ticker, recv, stock_data, events=None):
+    """Compute lead-lag correlation: MAUDE report changes vs stock returns.
+    Tests lags 0-6 months. Negative corr at lag N = MAUDE spike predicts
+    stock decline N months later. Returns full case study dict or None."""
+    if not recv or not stock_data: return None
+    common = sorted(set(recv.keys()) & set(stock_data.keys()))
+    if len(common) < 6: return None
+
+    rv = [recv.get(m,0) for m in common]
+    sv = [stock_data.get(m,0) for m in common]
+
+    # Month-over-month returns
+    sr = [0.0]+[(sv[i]-sv[i-1])/sv[i-1] if sv[i-1]>0 else 0.0 for i in range(1,len(sv))]
+    mc = [0.0]+[(rv[i]-rv[i-1])/rv[i-1] if rv[i-1]>0 else 0.0 for i in range(1,len(rv))]
+
+    def _corr(a,b):
+        n=min(len(a),len(b))
+        if n<3: return 0.0
+        ma,mb=sum(a[:n])/n,sum(b[:n])/n
+        num=sum((a[i]-ma)*(b[i]-mb) for i in range(n))
+        da=sum((a[i]-ma)**2 for i in range(n))**0.5
+        db=sum((b[i]-mb)**2 for i in range(n))**0.5
+        return num/(da*db) if da*db>0 else 0.0
+
+    # Test lags 0-6 (MAUDE leads stock)
+    lags = []
+    for lag in range(7):
+        if lag >= len(common)-3: break
+        ms = mc[:len(mc)-lag] if lag>0 else mc
+        ss = sr[lag:] if lag>0 else sr
+        n = min(len(ms),len(ss))
+        c = _corr(ms[:n],ss[:n])
+        lags.append({"lag":lag,"corr":round(c,3)})
+
+    opt = min(lags, key=lambda x:x["corr"]) if lags else {"lag":0,"corr":0.0}
+
+    # Signal events: months where MAUDE z-score > 1.5
+    mean_r = sum(rv)/len(rv) if rv else 0
+    std_r = (sum((v-mean_r)**2 for v in rv)/len(rv))**0.5 if len(rv)>1 else 0
+    signals = []
+    for i,m in enumerate(common):
+        if std_r > 0:
+            z = (rv[i]-mean_r)/std_r
+            if z > 1.5:
+                future_return = None
+                fi = i + opt["lag"]
+                end_i = min(fi+3, len(sv)-1)
+                if fi < len(sv) and end_i < len(sv) and sv[fi] > 0:
+                    future_return = round((sv[end_i]-sv[fi])/sv[fi]*100, 1)
+                signals.append({"month":m,"z":round(z,2),"count":rv[i],
+                    "stock_at_signal":sv[i] if i<len(sv) else None,
+                    "future_return_pct":future_return})
+
+    hits = sum(1 for s in signals if s.get("future_return_pct") is not None and s["future_return_pct"]<0)
+    hit_rate = round(hits/len(signals)*100,1) if signals else 0.0
+
+    max_maude = max(rv) if rv else 0
+    max_month = common[rv.index(max_maude)] if rv and max_maude>0 else "N/A"
+
+    return {
+        "ticker":ticker,"months":common,"maude":rv,"stock":sv,
+        "returns":[round(x,4) for x in sr],"maude_changes":[round(x,4) for x in mc],
+        "lags":lags,"optimal_lag":opt,"signals":signals,"hit_rate":hit_rate,
+        "events":events or [],
+        "summary":{"total_months":len(common),"max_maude":max_maude,
+                    "max_maude_month":max_month,
+                    "stock_start":sv[0] if sv else 0,"stock_end":sv[-1] if sv else 0,
+                    "stock_change_pct":round((sv[-1]-sv[0])/sv[0]*100,1) if sv and sv[0]>0 else 0}
+    }
+
+
+# ============================================================
+# CASE STUDIES HTML GENERATOR (complete tab content)
+# ============================================================
+def generate_case_studies_html(all_res):
+    """Generate complete Case Studies tab HTML + Chart.js data + init JS.
+    Returns tuple: (html_string, js_data_json, js_init_code)"""
+    cs_results = {}
+    for did,R in all_res.items():
+        cs = R.get("case_study")
+        if cs: cs_results[cs["ticker"]] = (cs, did, R)
+
+    if not cs_results:
+        h = '<div id="tc-casestudies" class="tabcontent">'
+        h += '<h2>Case Studies</h2><p style="color:var(--tx2)">No case study data. Ensure yfinance is installed.</p></div>'
+        return h, "{}", ""
+
+    h = '<div id="tc-casestudies" class="tabcontent">\n'
+    h += '<h2>Case Studies: MAUDE Signal &#8594; Stock Price</h2>\n'
+    h += '<p class="cs-intro">These case studies examine historical instances where rising MAUDE adverse event '
+    h += 'reports preceded significant stock price movements. The goal: identify the <strong>optimal signal lead time</strong> '
+    h += 'and <strong>hit rate</strong> so this framework can be applied prospectively. '
+    h += 'A negative correlation at lag N means a MAUDE spike in month T predicted a stock decline around month T+N.</p>\n'
+
+    for tk,(cs,did,R) in cs_results.items():
+        opt = cs["optimal_lag"]
+        sig_class = "signal-negative" if opt["corr"]<-0.1 else "signal-positive"
+        sc = cs["summary"]["stock_change_pct"]
+
+        h += f'<div class="cs-card {sig_class}">\n'
+        h += f'<div class="cs-header"><h3>{tk} &mdash; {R["dev"]["name"]} ({R["dev"]["company"]})</h3>\n'
+        h += f'<span class="cs-lag-badge">Optimal Lead: {opt["lag"]}mo (r={opt["corr"]})</span></div>\n'
+        h += f'<div class="cs-chart-wrap"><canvas id="cs-ch-{tk}"></canvas></div>\n'
+
+        # Metrics
+        h += '<div class="cs-metrics">\n'
+        h += f'<div class="cs-metric"><span class="lbl">Period</span><span class="val">{cs["summary"]["total_months"]}mo</span></div>\n'
+        h += f'<div class="cs-metric"><span class="lbl">Optimal Lag</span><span class="val">{opt["lag"]}mo</span></div>\n'
+        vc = "neg" if opt["corr"]<0 else "pos"
+        h += f'<div class="cs-metric"><span class="lbl">Lag Correlation</span><span class="val {vc}">{opt["corr"]}</span></div>\n'
+        h += f'<div class="cs-metric"><span class="lbl">Hit Rate</span><span class="val">{cs["hit_rate"]}%</span></div>\n'
+        hc = "neg" if sc<0 else "pos"
+        h += f'<div class="cs-metric"><span class="lbl">Stock Change</span><span class="val {hc}">{sc:+.1f}%</span></div>\n'
+        h += f'<div class="cs-metric"><span class="lbl">Peak MAUDE</span><span class="val">{cs["summary"]["max_maude_month"]}<br>({cs["summary"]["max_maude"]})</span></div>\n'
+        h += '</div>\n'
+
+        # Lag table
+        h += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600;color:var(--g);font-size:13px">&#9660; Lead-Lag Correlation Table</summary>\n'
+        h += '<table class="cs-lag-table"><tr><th>MAUDE Leads By</th>'
+        for lg in cs["lags"]: h += f'<th>{lg["lag"]}mo</th>'
+        h += '</tr><tr><td><strong>Correlation</strong></td>'
+        for lg in cs["lags"]:
+            cls = ' class="best"' if lg["lag"]==opt["lag"] else ""
+            h += f'<td{cls}>{lg["corr"]:+.3f}</td>'
+        h += '</tr></table></details>\n'
+
+        # Signal table
+        if cs["signals"]:
+            h += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600;color:var(--g);font-size:13px">&#9660; Signal Events (Z &gt; 1.5)</summary>\n'
+            h += f'<table class="cs-sig-table"><tr><th>Month</th><th>Count</th><th>Z</th><th>Stock</th><th>Return ({opt["lag"]+3}mo)</th></tr>\n'
+            for sig in cs["signals"]:
+                fr = sig.get("future_return_pct")
+                fs = f'{fr:+.1f}%' if fr is not None else "N/A"
+                fc = "neg" if fr is not None and fr<0 else ("pos" if fr is not None and fr>0 else "")
+                sp = f'${sig["stock_at_signal"]:.2f}' if sig.get("stock_at_signal") else "N/A"
+                h += f'<tr><td>{sig["month"]}</td><td>{sig["count"]}</td><td>{sig["z"]:.1f}</td>'
+                h += f'<td>{sp}</td><td class="{fc}">{fs}</td></tr>\n'
+            h += '</table></details>\n'
+
+        # Events timeline
+        if cs["events"]:
+            h += '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;color:var(--g);font-size:13px">&#9660; Key Events</summary><div style="padding:8px 0">'
+            for evt in cs["events"]:
+                ec = {"RECALL":"var(--red)","CRASH":"var(--red)","LEGAL":"var(--red)",
+                      "PEAK":"var(--org)","FDA":"var(--org)",
+                      "IPO":"var(--g)","REIMB":"var(--g)","DATA":"var(--g)",
+                      "MGMT":"#666","EARN":"#666"}.get(evt["type"],"var(--tx2)")
+                h += f'<div style="margin:4px 0;font-size:12px"><span style="color:{ec};font-weight:700">{evt["date"]}</span> '
+                h += f'<span style="background:{ec};color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600">{evt["type"]}</span> '
+                h += f'{evt["desc"]}</div>\n'
+            h += '</div></details>\n'
+
+        # Thesis verdict
+        h += '<div class="cs-thesis">'
+        if opt["corr"]<-0.15 and cs["hit_rate"]>50:
+            h += f'<strong>&#9989; THESIS CONFIRMED:</strong> MAUDE spikes led stock declines by ~{opt["lag"]} months '
+            h += f'with {cs["hit_rate"]}% hit rate (r={opt["corr"]}). Tradeable early warning window for {tk}.'
+        elif opt["corr"]<-0.1:
+            h += f'<strong>&#9888; PARTIALLY SUPPORTED:</strong> Weak negative correlation ({opt["corr"]}) at {opt["lag"]}mo lag, '
+            h += f'{cs["hit_rate"]}% hit rate. Some signal but high noise.'
+        else:
+            h += f'<strong>&#10060; NOT SUPPORTED (standard model):</strong> Correlation {opt["corr"]} at {opt["lag"]}mo lag. '
+            h += f'{tk} may need severity-mix or event-driven analysis instead of trend-based.'
+        h += '</div>\n</div>\n'
+
+    h += '</div>\n'
+
+    # JS data
+    jsd = {}
+    for tk,(cs,did,R) in cs_results.items():
+        jsd[tk] = {"months":cs["months"],"maude":cs["maude"],"stock":cs["stock"],
+                    "events":cs["events"],"optimal_lag":cs["optimal_lag"],"hit_rate":cs["hit_rate"]}
+
+    # JS init function
+    jsi = '''
+function initCaseStudies(){
+if(!window.cs_data)return;
+for(var tk in cs_data){var cs=cs_data[tk];
+var ctx=document.getElementById("cs-ch-"+tk);if(!ctx)continue;
+var evtMap={};cs.events.forEach(function(e){evtMap[e.date]=e;});
+var barC=cs.months.map(function(m){
+  if(evtMap[m]){var t=evtMap[m].type;
+    if(t==="RECALL"||t==="CRASH"||t==="LEGAL")return "rgba(192,57,43,0.6)";
+    if(t==="PEAK"||t==="FDA")return "rgba(230,126,34,0.6)";
+    return "rgba(43,95,58,0.4)";}
+  return "rgba(192,57,43,0.25)";});
+new Chart(ctx,{type:"bar",data:{labels:cs.months,datasets:[
+  {label:"MAUDE Reports",data:cs.maude,backgroundColor:barC,
+   borderColor:barC.map(function(c){return c.replace(/0\\.[0-9]+\\)/,"0.9)");}),borderWidth:1,yAxisID:"y",order:2},
+  {label:"Stock ($)",data:cs.stock,type:"line",borderColor:"#2B5F3A",borderWidth:2.5,
+   fill:false,pointRadius:1.5,tension:0.2,yAxisID:"y1",order:1}
+]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
+scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
+y:{position:"left",grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#c0392b",font:{size:10}},
+   title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}},
+y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#2B5F3A",font:{size:10}},
+    title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}}},
+plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
+zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},
+tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,
+callbacks:{afterBody:function(items){var idx=items[0].dataIndex;var month=cs.months[idx];var msgs=[];
+cs.events.forEach(function(e){if(e.date===month)msgs.push(e.type+": "+e.desc);});
+return msgs.length?"\\n"+msgs.join("\\n"):"";}}}}
+}});}}
+'''
+    return h, json.dumps(jsd), jsi
+
+
+# ============================================================
+# END OF V3.2 BLOCK 1
+# ============================================================
+
+
+# ============================================================
 # LIVE DATA: Stock Prices via yfinance
 # ============================================================
 TICKER_TO_YAHOO = {"DXCM":"DXCM","PODD":"PODD","TNDM":"TNDM","ABT_LIBRE":"ABT","BBNX":"BBNX","MDT_DM":"MDT"}
@@ -1276,5 +1627,242 @@ def main():
     print(f"MAUDE Monitor V3.1 | {datetime.now():%Y-%m-%d %H:%M} | {len(DEVICES)} products | Modules: {'ALL (inline)' if HAS_MODULES else 'NONE'}")
     r,s=run_pipeline(a.backfill,a.quick); generate_html(r,s); send_alerts(s)
     print(f"\nCOMPLETE | docs/index.html")
+# ============================================================
+# V3.2 BLOCK 2 — PIPELINE WRAPPER + HTML POST-PROCESSOR
+# ============================================================
+# PASTE THIS at the bottom of Part 2, right ABOVE the line:
+#   if __name__=="__main__": main()
+#
+# This uses monkey-patching: it wraps your existing run_pipeline
+# and generate_html functions WITHOUT modifying them. Your original
+# code runs first, then V3.2 adds smoothing, case studies, and
+# patches the HTML output.
+# ============================================================
+import re as _re
+
+# ============================================================
+# WRAP run_pipeline: adds smoothing + case study data to results
+# ============================================================
+_v31_run_pipeline = run_pipeline
+
+def run_pipeline(backfill=False, quick=False):
+    """V3.2 wrapper: runs original pipeline, then adds smoothing + case study data."""
+    all_res, summary = _v31_run_pipeline(backfill, quick)
+
+    print(f"\n{'='*50}\nV3.2: Computing smoothing + case studies...")
+
+    for did, R in all_res.items():
+        dev = R.get("dev", {})
+        recv = R.get("recv", {})
+        evnt = R.get("evnt", {})
+
+        # Batch smoothing (for ALL devices)
+        try:
+            R["smooth"] = smooth_batch_data(recv, evnt)
+            sm = R["smooth"]
+            if sm["method"] not in ("none","raw"):
+                print(f"  [{did}] Smoothing: {sm['method']}-{sm['window']} (fit r={sm['fit_corr']})")
+        except Exception as ex:
+            R["smooth"] = {"smoothed":dict(recv),"method":"none","window":0,"raw":dict(recv),"fit_corr":0.0}
+            print(f"  [{did}] Smoothing error: {ex}")
+
+        # Case study (only for flagged devices)
+        R["case_study"] = None
+        if dev.get("case_study"):
+            try:
+                cs_ticker = CASE_STUDY_TICKER_MAP.get(did, dev.get("ticker",""))
+                print(f"  [{did}] Case Study: fetching stock for {cs_ticker} from 2020...")
+                cs_stock = get_monthly_stock(cs_ticker, "20200101")
+                cs_events = CASE_STUDY_EVENTS.get(cs_ticker, [])
+                if cs_stock:
+                    cs_data = compute_case_study(cs_ticker, recv, cs_stock, cs_events)
+                    R["case_study"] = cs_data
+                    if cs_data:
+                        print(f"  [{did}] Lag={cs_data['optimal_lag']['lag']}mo "
+                              f"r={cs_data['optimal_lag']['corr']} "
+                              f"hit={cs_data['hit_rate']}%")
+                else:
+                    print(f"  [{did}] No stock data returned for {cs_ticker}")
+                time.sleep(0.3)
+            except Exception as ex:
+                print(f"  [{did}] Case study error: {ex}")
+
+    print("V3.2 enrichment complete.\n")
+    return all_res, summary
+
+
+# ============================================================
+# V3.2 CSS (injected into generated HTML)
+# ============================================================
+_V32_CSS = '''
+/* V3.2 Smoothing badge */
+.sm-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;background:#e8f0fe;color:#1a73e8;margin-left:8px}
+.sm-badge.raw{background:#f0f0f0;color:#666}
+/* V3.2 Case Studies */
+.cs-card{background:var(--bg);border:2px solid var(--bd);border-radius:12px;padding:24px;margin-bottom:24px}
+.cs-card.signal-negative{border-left:4px solid var(--red)}.cs-card.signal-positive{border-left:4px solid var(--g)}
+.cs-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px}
+.cs-header h3{font-size:16px;font-weight:700;color:var(--g);margin:0}
+.cs-lag-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;background:var(--gx);color:var(--g)}
+.cs-chart-wrap{height:320px;margin-bottom:16px;position:relative}
+.cs-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.cs-metric{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:12px;text-align:center}
+.cs-metric .lbl{font-size:11px;color:var(--tx3);text-transform:uppercase;font-weight:600;display:block;margin-bottom:4px}
+.cs-metric .val{font-size:18px;font-weight:700;color:var(--tx)}.cs-metric .val.neg{color:var(--red)}.cs-metric .val.pos{color:var(--g)}
+.cs-lag-table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}
+.cs-lag-table th{background:var(--gp);color:var(--g);padding:6px 10px;text-align:center;font-weight:600;border:1px solid var(--bd)}
+.cs-lag-table td{padding:6px 10px;text-align:center;border:1px solid var(--bd)}.cs-lag-table td.best{background:#fef3e0;font-weight:700}
+.cs-sig-table{width:100%;border-collapse:collapse;font-size:12px}
+.cs-sig-table th{background:var(--gp);color:var(--g);padding:6px 10px;text-align:left;font-weight:600;border:1px solid var(--bd)}
+.cs-sig-table td{padding:6px 10px;text-align:left;border:1px solid var(--bd)}.cs-sig-table td.neg{color:var(--red);font-weight:600}.cs-sig-table td.pos{color:var(--g);font-weight:600}
+.cs-thesis{background:var(--gp);border:1px solid var(--g);border-radius:8px;padding:16px;margin-top:12px;font-size:13px;line-height:1.6}
+.cs-thesis strong{color:var(--g)}
+.cs-intro{font-size:14px;color:var(--tx2);line-height:1.7;margin-bottom:24px;max-width:900px}
+'''
+
+# ============================================================
+# V3.2 JS: Smoothed chart handler (monkey-patches mk function)
+# ============================================================
+_V32_SMOOTHED_JS = '''
+/* V3.2: Wrap mk() to handle "smoothed" view */
+var _v31_mk=mk;
+mk=function(did,D,v){
+if(v==="smoothed"){
+  var ctx=document.getElementById("ch-"+did);if(!ctx)return;
+  if(charts[did])charts[did].destroy();
+  var bm=D.bm||[];
+  var bc2=D.l.map(function(m){return bm.indexOf(m)>=0?"rgba(230,126,34,0.3)":"rgba(30,144,255,0.3)";});
+  var bbc2=D.l.map(function(m){return bm.indexOf(m)>=0?"rgba(230,126,34,0.8)":"rgba(30,144,255,0.7)";});
+  var smLabel=D.sm_method||"Smoothed";
+  var smCorr=D.sm_corr||0;
+  var ds=[
+    {label:smLabel,data:D.sm||D.r,backgroundColor:bc2,borderColor:bbc2,borderWidth:1},
+    {label:"Raw (date_received)",data:D.r,type:"line",borderColor:"rgba(150,150,150,0.4)",
+     borderWidth:1,borderDash:[4,4],fill:false,pointRadius:0,tension:0.2}
+  ];
+  var yL="Smoothed Reports ("+smLabel+", fit r="+smCorr+")";
+  charts[did]=new Chart(ctx,{type:"bar",data:{labels:D.l,datasets:ds},options:{responsive:true,maintainAspectRatio:false,
+    interaction:{mode:"index",intersect:false},
+    scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
+    y:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#4a5f50",font:{size:10}},title:{display:true,text:yL,color:"#4a5f50",font:{size:11}}}},
+    plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
+    zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},
+    tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1}}}});
+  return;
+}
+_v31_mk(did,D,v);};
+
+/* V3.2: Add "smoothed" to chart descriptions */
+if(typeof chartDescs!=="undefined"){chartDescs["smoothed"]="SMOOTHED VIEW: Blue bars show the best-fit smoothed MAUDE report count (method auto-selected from SMA-3/4/5 and EWMA-3/4/5). Dashed grey line shows raw date_received counts for comparison. Smoothing redistributes batch-reported dumps across prior months to reveal the true underlying trend. The fit correlation (r) measures how well the smoothed series aligns with date_of_event data. Higher r = better alignment = more reliable trend.";}
+'''
+
+
+# ============================================================
+# WRAP generate_html: patches output with smoothing + case studies
+# ============================================================
+_v31_generate_html = generate_html
+
+def generate_html(all_res, summary):
+    """V3.2 wrapper: runs original HTML gen, then patches in smoothing + case studies."""
+    # Run original — this creates docs/index.html
+    _v31_generate_html(all_res, summary)
+
+    html_path = "docs/index.html"
+    try:
+        with open(html_path, "r") as f:
+            html = f.read()
+    except Exception as ex:
+        print(f"[V3.2] Could not read {html_path}: {ex}")
+        return
+
+    print("[V3.2] Patching HTML with smoothing + case studies...")
+    original_len = len(html)
+
+    # --- PATCH 1: Inject CSS before </style> ---
+    html = html.replace("</style>", _V32_CSS + "\n</style>")
+
+    # --- PATCH 2: Add Case Studies tab button ---
+    # Strategy: find the first <div id="tc- (start of tab content) and insert tab button before it
+    # The tabs div closes with </div> right before the first tabcontent
+    tc_match = _re.search(r'(</div>\s*<div id="tc-)', html)
+    if tc_match:
+        insert_pos = tc_match.start()
+        tab_btn = '<div class="tab" onclick="showTab(\'casestudies\')">Case Studies</div>'
+        html = html[:insert_pos] + tab_btn + html[insert_pos:]
+    else:
+        print("[V3.2] WARN: Could not find tab insertion point")
+
+    # --- PATCH 3: Add "Smoothed" button to every device's chart controls ---
+    # Find all reset buttons and add Smoothed before them
+    html = html.replace(
+        '<button class="cb rst"',
+        '<button class="cb" data-v="smoothed">Smoothed</button><button class="cb rst"'
+    )
+
+    # --- PATCH 4: Inject smoothed data into chart data JSON ---
+    cd_marker = 'var defined_cd='
+    cd_start = html.find(cd_marker)
+    if cd_start >= 0:
+        json_start = cd_start + len(cd_marker)
+        # Find matching closing brace (balanced)
+        depth, i = 0, json_start
+        cd_end = -1
+        while i < len(html):
+            if html[i] == '{': depth += 1
+            elif html[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    cd_end = i + 1
+                    break
+            i += 1
+        if cd_end > json_start:
+            try:
+                cd = json.loads(html[json_start:cd_end])
+                for did, R in all_res.items():
+                    if did in cd:
+                        sm = R.get("smooth", {})
+                        sm_data = sm.get("smoothed", {})
+                        labels = cd[did].get("l", [])
+                        cd[did]["sm"] = [sm_data.get(m, 0) for m in labels]
+                        mth = sm.get("method", "raw")
+                        win = sm.get("window", 0)
+                        cd[did]["sm_method"] = f"{mth}-{win}" if mth not in ("none","raw") else "raw"
+                        cd[did]["sm_corr"] = sm.get("fit_corr", 0)
+                html = html[:json_start] + json.dumps(cd) + html[cd_end:]
+                print(f"  Smoothed data injected for {len([d for d in all_res if d in cd])} devices")
+            except Exception as ex:
+                print(f"  [V3.2] WARN: Could not parse chart data JSON: {ex}")
+    else:
+        print("[V3.2] WARN: Could not find defined_cd in HTML")
+
+    # --- PATCH 5: Generate Case Studies tab content ---
+    cs_html, cs_js_data, cs_js_init = generate_case_studies_html(all_res)
+
+    # Insert case studies HTML before </body>
+    html = html.replace('</body>', cs_html + '\n</body>')
+
+    # --- PATCH 6: Inject V3.2 JavaScript before last </script> ---
+    last_script = html.rfind('</script>')
+    if last_script >= 0:
+        v32_js = '\n/* V3.2 Additions */\n'
+        v32_js += _V32_SMOOTHED_JS + '\n'
+        v32_js += f'var cs_data={cs_js_data};\n'
+        v32_js += cs_js_init + '\n'
+        v32_js += 'document.addEventListener("DOMContentLoaded",function(){initCaseStudies();});\n'
+        html = html[:last_script] + v32_js + html[last_script:]
+
+    # --- Write patched file ---
+    try:
+        with open(html_path, "w") as f:
+            f.write(html)
+        delta = len(html) - original_len
+        print(f"[V3.2] HTML patched: {html_path} (+{delta//1024}KB)")
+    except Exception as ex:
+        print(f"[V3.2] Could not write {html_path}: {ex}")
+
+
+# ============================================================
+# END OF V3.2 BLOCK 2
+# ============================================================
 
 if __name__=="__main__": main()
