@@ -604,24 +604,34 @@ def generate_case_studies_html(all_res):
     jsi = '''
 function initCaseStudies(){
 if(!window.cs_data)return;
-for(var tk in cs_data){var cs=cs_data[tk];
-var ctx=document.getElementById("cs-ch-"+tk);if(!ctx)continue;
-var evtMap={};cs.events.forEach(function(e){evtMap[e.date]=e;});
-var barC=cs.months.map(function(m){if(evtMap[m]){var t=evtMap[m].type;if(t==="RECALL"||t==="CRASH"||t==="LEGAL")return "rgba(192,57,43,0.6)";if(t==="PEAK"||t==="FDA")return "rgba(230,126,34,0.6)";return "rgba(43,95,58,0.4)";}return "rgba(192,57,43,0.25)";});
-new Chart(ctx,{type:"bar",data:{labels:cs.months,datasets:[
-{label:"MAUDE Reports",data:cs.maude,backgroundColor:barC,borderColor:barC,borderWidth:1,yAxisID:"y",order:2},
+for(var tk in cs_data){
+var cs=cs_data[tk];
+var ctx=document.getElementById("cs-ch-"+tk);
+if(!ctx)continue;
+var barC=cs.months.map(function(m,i){return "rgba(192,57,43,0.25)";});
+new Chart(ctx,{
+type:"bar",
+data:{labels:cs.months,datasets:[
+{label:"MAUDE Reports",data:cs.maude,backgroundColor:barC,borderColor:"rgba(192,57,43,0.7)",borderWidth:1,yAxisID:"y",order:2},
 {label:"Stock ($)",data:cs.stock,type:"line",borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:1.5,tension:0.2,yAxisID:"y1",order:1}
-]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
-scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
-y:{position:"left",grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}},
-y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}}},
-plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
-zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},
-tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,
-callbacks:{afterBody:function(items){var idx=items[0].dataIndex;var month=cs.months[idx];var msgs=[];
-cs.events.forEach(function(e){if(e.date===month)msgs.push(e.type+": "+e.desc);});
-return msgs.length?"\\n"+msgs.join("\\n"):"";}}}}
-}});}}
+]},
+options:{
+responsive:true,
+maintainAspectRatio:false,
+interaction:{mode:"index",intersect:false},
+scales:{
+x:{ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
+y:{position:"left",ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}},
+y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}}
+},
+plugins:{
+legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
+zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},mode:"x"}}
+}
+}
+});
+}
+}
 '''
     return h, json.dumps(jsd), jsi
 
