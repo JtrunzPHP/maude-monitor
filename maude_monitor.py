@@ -902,7 +902,7 @@ def generate_html(all_res,summary):
 <div class="co-desc">{all_r["device"]["description"]}</div>
 <div class="sg" style="margin-bottom:12px"><div class="si"><div class="sil">LATEST REPORTS</div><div class="siv">{fmt0(lt_stat["count"])}</div><div class="sis">{lt_stat["month"]}</div></div>
 <div class="si"><div class="sil">Z-SCORE</div><div class="siv {"neg" if lt_stat["z_score"]>1.5 else "pos" if lt_stat["z_score"]<-1.5 else ""}">{lt_stat["z_score"]:+.2f}</div></div>
-<div class="si"><div class="sil">R-SCORE</div><div class="siv {"neg" if (rs or {{}}).get("total",0)>=50 else ""}">{fmt(rs["total"]) if rs else "\u2014"}</div></div>
+<div class="si"><div class="sil">R-SCORE</div><div class="siv {"neg" if (rs or dict()).get("total",0)>=50 else ""}">{fmt(rs["total"]) if rs else "\u2014"}</div></div>
 <div class="si"><div class="sil">RATE/$M REV</div><div class="siv">{fmt2(lt_stat["rate_per_m"])}</div></div></div>\n'''
         acc_html=""
         ins=all_r.get("insider")
