@@ -1235,7 +1235,7 @@ def generate_html(all_res, summary):
     html = html.replace('</body>', cs_html + '\n</body>')
 
     # PATCH: Inject case study JS as separate script block
-   cs_script = '<script>\nvar cs_data=' + cs_js_data + ';\n' + cs_js_init + '\nwindow.addEventListener("load",function(){initCaseStudies();});\n</script>\n'
+    cs_script = '<script>\nvar cs_data=' + cs_js_data + ';\n' + cs_js_init + '\nwindow.addEventListener("load",function(){initCaseStudies();});\n</script>\n'
     html = html.replace('</body>', cs_script + '</body>')
 
     try:
