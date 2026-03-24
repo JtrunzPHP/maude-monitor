@@ -1234,11 +1234,9 @@ def generate_html(all_res, summary):
     cs_html, cs_js_data, cs_js_init = generate_case_studies_html(all_res)
     html = html.replace('</body>', cs_html + '\n</body>')
 
-    # PATCH: Inject case study JS before last </script>
-    last_script = html.rfind('</script>')
-    if last_script >= 0:
-        v32_js = f'\nvar cs_data={cs_js_data};\n' + cs_js_init + '\ndocument.addEventListener("DOMContentLoaded",function(){{initCaseStudies();}});\n'
-        html = html[:last_script] + v32_js + html[last_script:]
+    # PATCH: Inject case study JS as separate script block
+   cs_script = '<script>\nvar cs_data=' + cs_js_data + ';\n' + cs_js_init + '\nwindow.addEventListener("load",function(){initCaseStudies();});\n</script>\n'
+    html = html.replace('</body>', cs_script + '</body>')
 
     try:
         with open(html_path, "w") as f: f.write(html)
