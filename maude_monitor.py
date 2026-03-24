@@ -589,6 +589,189 @@ def backtest_r_score(stats, stock_prices, threshold=50):
         return {"status":"error","message":str(e)[:200]}
 
 # ============================================================
+# LIVE DATA: Stock Prices via yfinance
+# ============================================================
+TICKER_TO_YAHOO = {"DXCM":"DXCM","PODD":"PODD","TNDM":"TNDM","ABT_LIBRE":"ABT","BBNX":"BBNX","MDT_DM":"MDT"}
+
+def fetch_live_stock_prices():
+    """Fetch 3yr monthly close prices via yfinance. Returns dict matching STOCK_MONTHLY format."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        print("  yfinance not installed — using hardcoded stock prices.")
+        return {}
+    live = {}
+    for our_tk, yahoo_tk in TICKER_TO_YAHOO.items():
+        try:
+            print(f"  Fetching {yahoo_tk} live stock data...")
+            tkr = yf.Ticker(yahoo_tk)
+            hist = tkr.history(period="3y", interval="1mo")
+            if hist.empty: continue
+            prices = {}
+            for dt, row in hist.iterrows():
+                ym = dt.strftime("%Y-%m")
+                prices[ym] = round(float(row["Close"]), 2)
+            if prices:
+                live[our_tk] = prices
+                print(f"    Got {len(prices)} months for {yahoo_tk}, latest: {sorted(prices.keys())[-1]} = ${prices[sorted(prices.keys())[-1]]}")
+        except Exception as e:
+            print(f"  Warning: {yahoo_tk} fetch failed: {e}")
+    return live
+
+def merge_stock_data(hardcoded, live):
+    """Merge live stock data with hardcoded fallback. Live takes priority."""
+    merged = {}
+    for tk in set(list(hardcoded.keys()) + list(live.keys())):
+        merged[tk] = {}
+        if tk in hardcoded:
+            merged[tk].update(hardcoded[tk])
+        if tk in live:
+            merged[tk].update(live[tk])  # live overwrites hardcoded for same months
+    return merged
+
+# ============================================================
+# LIVE DATA: FDA Recalls from openFDA
+# ============================================================
+def fetch_fda_recalls(search_query, limit=5):
+    """Fetch recent device recalls from openFDA recall endpoint."""
+    try:
+        url = f"https://api.fda.gov/device/recall.json?search={_q(search_query)}&limit={limit}&sort=event_date_posted:desc"
+        d = api_get(url)
+        if not d or "results" not in d:
+            return {"status":"no_data","message":"No recalls found in openFDA.","recalls":[]}
+        recalls = []
+        for r in d["results"][:limit]:
+            recalls.append({
+                "event_id": r.get("res_event_number",""),
+                "classification": r.get("event_classification","Unknown"),
+                "date_posted": (r.get("event_date_posted","") or "")[:10],
+                "reason": (r.get("reason_for_recall","N/A"))[:250],
+                "product": (r.get("product_description",""))[:200],
+                "status": r.get("status",""),
+                "firm": r.get("recalling_firm",""),
+            })
+        return {"status":"ok","recalls":recalls,"total":len(recalls),
+                "message":f"{len(recalls)} recalls found in openFDA database."}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:200],"recalls":[]}
+
+# ============================================================
+# ENHANCED: Insider Trading with Buy/Sell from Form 4 XML
+# ============================================================
+def analyze_insider_trading_detailed(ticker):
+    """Enhanced insider trading: parses Form 4 XML for buy/sell direction and dollar amounts."""
+    cik = TICKER_TO_CIK.get(ticker)
+    if not cik:
+        return {"status":"no_cik","message":f"No CIK for {ticker}."}
+    try:
+        url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
+        d = api_get(url)
+        if not d or "filings" not in d:
+            return analyze_insider_trading(ticker)  # fallback to basic
+        recent = d["filings"].get("recent", {})
+        forms = recent.get("form", [])
+        dates = recent.get("filingDate", [])
+        accessions = recent.get("accessionNumber", [])
+        primary_docs = recent.get("primaryDocument", [])
+        cutoff = (datetime.now() - __import__('datetime').timedelta(days=90)).strftime("%Y-%m-%d")
+        buys, sells, other = 0, 0, 0
+        total_buy_value, total_sell_value = 0.0, 0.0
+        transactions = []
+        for i, f in enumerate(forms):
+            if f not in ("4", "4/A"): continue
+            if i >= len(dates) or dates[i] < cutoff: continue
+            if i >= len(accessions) or i >= len(primary_docs): continue
+            # Fetch the actual Form 4 XML to get transaction codes
+            acc_clean = accessions[i].replace("-", "")
+            doc = primary_docs[i]
+            form4_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_clean}/{doc}"
+            try:
+                req = Request(form4_url, headers={"User-Agent": "MAUDE/3.1 research@example.com"})
+                with urlopen(req, timeout=15) as resp:
+                    xml_text = resp.read().decode("utf-8", errors="ignore")
+                # Parse transaction codes from XML
+                # P = open market purchase, S = open market sale, A = grant/award
+                import re as _re
+                codes = _re.findall(r'<transactionCode>(\w)</transactionCode>', xml_text)
+                shares_list = _re.findall(r'<transactionShares>.*?<value>([\d.]+)</value>', xml_text, _re.DOTALL)
+                prices_list = _re.findall(r'<transactionPricePerShare>.*?<value>([\d.]+)</value>', xml_text, _re.DOTALL)
+                # Parse owner name
+                owner = _re.findall(r'<rptOwnerName>(.*?)</rptOwnerName>', xml_text)
+                owner_name = owner[0] if owner else "Unknown"
+                txn_type = "OTHER"
+                txn_shares = 0
+                txn_value = 0.0
+                for ci, code in enumerate(codes):
+                    sh = float(shares_list[ci]) if ci < len(shares_list) else 0
+                    pr = float(prices_list[ci]) if ci < len(prices_list) else 0
+                    val = sh * pr
+                    if code == "P":
+                        buys += 1; total_buy_value += val; txn_type = "BUY"
+                    elif code == "S":
+                        sells += 1; total_sell_value += val; txn_type = "SELL"
+                    else:
+                        other += 1; txn_type = code
+                    txn_shares += sh
+                    txn_value += val
+                transactions.append({"date": dates[i], "owner": owner_name, "type": txn_type,
+                    "shares": round(txn_shares), "value": round(txn_value)})
+                time.sleep(0.3)  # SEC rate limit
+            except Exception:
+                # If XML parsing fails, still count the filing
+                other += 1
+                transactions.append({"date": dates[i], "owner": "Unknown", "type": "UNKNOWN", "shares": 0, "value": 0})
+            if len(transactions) >= 15: break  # cap at 15 to avoid rate limits
+        total = buys + sells + other
+        if total == 0:
+            return {"status":"no_signals","message":"No Form 4 insider transactions in the last 90 days."}
+        # Determine signal
+        net_direction = "NET SELLER" if sells > buys else "NET BUYER" if buys > sells else "MIXED"
+        if sells > buys * 2 and total_sell_value > 500000:
+            signal = "bearish"
+        elif buys > sells * 2 and total_buy_value > 100000:
+            signal = "bullish"
+        elif sells > buys:
+            signal = "moderate_sell"
+        elif buys > sells:
+            signal = "moderate_buy"
+        else:
+            signal = "neutral"
+        msg = f"{total} Form 4 filings in 90 days: {buys} buys (${total_buy_value:,.0f}), {sells} sells (${total_sell_value:,.0f}), {other} other (grants/awards). "
+        msg += f"Insiders are {net_direction}. "
+        if signal == "bearish":
+            msg += "BEARISH: Heavy insider selling with significant dollar value. Combined with elevated R-Score = high conviction short signal."
+        elif signal == "bullish":
+            msg += "BULLISH: Insider buying despite MAUDE noise suggests management confidence in resolution."
+        elif signal == "moderate_sell":
+            msg += "Leaning sell-side. Monitor for acceleration."
+        elif signal == "moderate_buy":
+            msg += "Leaning buy-side. Potentially contrarian positive."
+        else:
+            msg += "No clear directional signal."
+        return {"status":"ok","message":msg,"form4_count":total,"buys":buys,"sells":sells,
+                "other":other,"total_buy_value":round(total_buy_value),"total_sell_value":round(total_sell_value),
+                "signal":signal,"net_direction":net_direction,"transactions":transactions[:10],
+                "latest_date":transactions[0]["date"] if transactions else None}
+    except Exception as e:
+        return analyze_insider_trading(ticker)  # fallback to basic version
+
+# ============================================================
+# REVENUE STALENESS TRACKER
+# ============================================================
+REVENUE_LAST_UPDATED = "2026-03-23"  # UPDATE THIS DATE EACH TIME YOU EDIT QUARTERLY_REVENUE
+
+def get_revenue_staleness():
+    """Returns how many days since revenue data was last updated."""
+    try:
+        last = datetime.strptime(REVENUE_LAST_UPDATED, "%Y-%m-%d")
+        days = (datetime.now() - last).days
+        if days > 120: return {"status":"STALE","days":days,"message":f"Revenue data is {days} days old. Update after latest earnings calls."}
+        elif days > 60: return {"status":"AGING","days":days,"message":f"Revenue data is {days} days old. Check for recent earnings."}
+        else: return {"status":"CURRENT","days":days,"message":f"Revenue data updated {days} days ago."}
+    except:
+        return {"status":"UNKNOWN","days":999,"message":"Could not determine revenue data age."}
+
+# ============================================================
 # PIPELINE — runs ALL modules (UNCHANGED from your working version)
 # ============================================================
 def run_pipeline(backfill=False,quick=False):
@@ -596,13 +779,24 @@ def run_pipeline(backfill=False,quick=False):
     all_res,summary={},[]
     if HAS_MODULES: print("ALL ENHANCED MODULES LOADED (inline)")
     else: print("BASIC mode - no enhanced modules")
+    # LIVE STOCK PRICES — fetch once, use everywhere
+    print("\n=== Fetching live stock prices ===")
+    live_stocks = fetch_live_stock_prices()
+    global STOCK_MONTHLY
+    STOCK_MONTHLY = merge_stock_data(STOCK_MONTHLY, live_stocks)
+    print(f"  Stock data: {len(live_stocks)} tickers updated live, {len(STOCK_MONTHLY)} total")
+    global _stock_source
+    _stock_source = f"LIVE ({len(live_stocks)} tickers via yfinance)" if live_stocks else "HARDCODED (install yfinance for live data)"
+    # Revenue staleness check
+    rev_status = get_revenue_staleness()
+    print(f"  Revenue data: {rev_status['status']} ({rev_status['message']})")
     for dev in DEVICES:
         did=dev["id"]; print(f"\n{'='*50}\n{dev['name']} ({dev['ticker']})")
         recv=fetch_counts(dev["search"],"date_received",start); time.sleep(0.3)
         evnt=fetch_counts(dev["search"],"date_of_event",start); time.sleep(0.3)
         sev=fetch_severity(dev["search"],start); batch=detect_batch(recv,evnt)
         stats=compute_stats(recv,sev,dev["ticker"]); rscore=compute_r_score(stats) if stats else None
-        modules={"enhanced_corr":None,"failure_modes":None,"google_trends":None,"insider":None,"trials":None,"short_interest":None,"edgar":None,"payer":None,"international":None,"recall_prob":None,"earnings_pred":None,"backtest":None,"peer_relative":None}
+        modules={"enhanced_corr":None,"failure_modes":None,"google_trends":None,"insider":None,"trials":None,"short_interest":None,"edgar":None,"payer":None,"international":None,"recall_prob":None,"earnings_pred":None,"backtest":None,"peer_relative":None,"recalls":None}
         if HAS_MODULES and stats:
             try:
                 print("  Running: Enhanced correlation...")
@@ -794,19 +988,33 @@ def generate_html(all_res,summary):
 <div class="si"><div class="sil">RATE/$M REV</div><div class="siv">{fmt2(lt_stat["rate_per_m"])}</div></div></div>\n'''
         # ACCORDION MODULES at company level
         acc_html=""
-        # 1. Insider Trading
+        # 1. Insider Trading — show buy/sell direction and dollar values
         ins=all_r.get("insider")
-        if ins and isinstance(ins,dict):
-            ins_stat=ins.get("status","N/A")
-            ins_cls="mok" if ins_stat=="ok" else "mwarn"
-            ins_sig=f'{ins.get("form4_count",0)} filings' if ins_stat=="ok" else ins_stat.upper()
-            acc_html+=_accordion(f"ins-{tk}","SEC Form 4 Insider Trading",f'<span class="mstat {ins_cls}">{ins_sig}</span>',
-                f'<div class="msub">{ins.get("message","")}</div><div class="msub"><strong>Why it matters:</strong> Heavy insider selling + high R-Score = strong conviction short signal. Insider buying during elevated MAUDE reports = management may believe issues are contained.</div>')
-        # 2. EDGAR NLP
+        if ins and isinstance(ins,dict) and ins.get("status")=="ok":
+            f4=ins.get("form4_count",0)
+            ins_buys=ins.get("buys",0); ins_sells=ins.get("sells",0); ins_other=ins.get("other",0)
+            ins_buy_val=ins.get("total_buy_value",0); ins_sell_val=ins.get("total_sell_value",0)
+            ins_dir=ins.get("net_direction","UNKNOWN"); ins_signal=ins.get("signal","neutral")
+            ins_col="#c0392b" if ins_signal in ("bearish","moderate_sell") else "#27ae60" if ins_signal in ("bullish","moderate_buy") else "var(--tx3)"
+            ins_content=f'<div class="sg" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px">'
+            ins_content+=f'<div class="si"><div class="sil">TOTAL (90D)</div><div class="siv">{f4}</div></div>'
+            ins_content+=f'<div class="si"><div class="sil">BUYS</div><div class="siv pos">{ins_buys}</div><div class="sis">${ins_buy_val:,.0f}</div></div>'
+            ins_content+=f'<div class="si"><div class="sil">SELLS</div><div class="siv neg">{ins_sells}</div><div class="sis">${ins_sell_val:,.0f}</div></div>'
+            ins_content+=f'<div class="si"><div class="sil">DIRECTION</div><div class="siv" style="color:{ins_col};font-size:13px">{ins_dir}</div></div></div>'
+            # Show recent transactions
+            txns=ins.get("transactions",[])
+            if txns:
+                ins_content+='<div class="msub"><strong>Recent transactions:</strong></div>'
+                for txn in txns[:6]:
+                    txn_col="pos" if txn.get("type")=="BUY" else "neg" if txn.get("type")=="SELL" else ""
+                    ins_content+=f'<div class="msub" style="padding-left:8px"><span style="font-family:monospace;color:var(--tx3)">{txn.get("date","")}</span> <span class="{txn_col}">{txn.get("type","?")}</span> {txn.get("owner","Unknown")} \u2014 {txn.get("shares",0):,} shares (${txn.get("value",0):,.0f})</div>'
+            ins_content+=f'<div class="msub" style="margin-top:6px"><strong>Signal interpretation:</strong> {ins.get("message","")}</div>'
+            acc_html+=_accordion(f"ins-{tk}","SEC Form 4 Insider Trading",f'<span class="mstat" style="color:{ins_col}">{ins_dir}</span>',ins_content)
+        # 2. EDGAR Filing Activity (NOT NLP — renamed for honesty)
         ed=all_r.get("edgar")
-        if ed and isinstance(ed,dict):
-            acc_html+=_accordion(f"ed-{tk}","SEC Filing NLP (EDGAR)",f'<span class="mstat {"mok" if ed.get("status")=="ok" else "mwarn"}">{ed.get("status","N/A").upper()}</span>',
-                f'<div class="msub">{ed.get("message","")}</div><div class="msub"><strong>Why it matters:</strong> Scans 10-Q/10-K filings for quality-related language (recall, warning letter, warranty cost). Rising frequency of these terms = management preparing the market for bad news.</div>')
+        if ed and isinstance(ed,dict) and ed.get("status")=="ok":
+            acc_html+=_accordion(f"ed-{tk}","SEC Filing Activity (EDGAR)",f'<span class="mstat mok">{ed.get("annual_filings",0)} annual + {ed.get("quarterly_filings",0)} quarterly</span>',
+                f'<div class="msub">{ed.get("message","")}</div><div class="msub"><strong>What this is:</strong> Counts recent 10-K and 10-Q filings from SEC EDGAR. This does NOT scan filing text — it tracks filing frequency. Latest filing: {ed.get("latest_date","unknown")}. To scan for quality-related language (recall, warranty, warning letter), download filings from EDGAR and search manually.</div>')
         # 3. Clinical Trials
         ct=all_r.get("trials")
         if ct and isinstance(ct,dict):
@@ -816,13 +1024,31 @@ def generate_html(all_res,summary):
                 for trial in ct["trials"][:5]:
                     ct_content+=f'<div class="msub" style="margin-top:4px">{trial["nct_id"]}: {trial["title"]} <span class="mstat mgrey">{trial["status"]}</span></div>'
             acc_html+=_accordion(f"ct-{tk}","Clinical Trials (ClinicalTrials.gov)",f'<span class="mstat {"mok" if ct.get("status")=="ok" else "mwarn"}">{ct.get("total",0) if ct.get("status")=="ok" else ct.get("status","N/A").upper()}</span>',ct_content)
-        # 4. MAUDE-Stock Correlation
+        # 4. MAUDE-Stock Correlation — show full lag table
         ec=all_r.get("enhanced_corr")
-        if ec and isinstance(ec,dict):
-            ec_rho=ec.get("best_rho")
-            ec_sig_str=f'\u03C1={ec_rho:+.3f}' if ec_rho is not None else "N/A"
-            acc_html+=_accordion(f"corr-{tk}","MAUDE-Stock Correlation",f'<span class="mstat {"mok" if ec.get("significant") else "mwarn"}">{ec_sig_str}</span>',
-                f'<div class="msub">{ec.get("message","")}</div><div class="msub"><strong>How to read:</strong> Spearman rank correlation between monthly MAUDE report counts and stock returns at various lags. Negative \u03C1 at 2-4 month lag = MAUDE spikes predict stock declines. The lag is your alpha window \u2014 the market takes that long to react. * means p&lt;0.05 (statistically significant).</div>')
+        if ec and isinstance(ec,dict) and ec.get("status")=="ok":
+            ec_rho=ec.get("best_rho",0); ec_lag=ec.get("best_lag",0); ec_p=ec.get("best_p",1); ec_sig=ec.get("significant",False)
+            ec_col="#c0392b" if ec_rho<-0.2 and ec_sig else "#27ae60" if ec_rho>0.2 and ec_sig else "var(--tx3)"
+            ec_content=f'<div class="sg" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px"><div class="si"><div class="sil">BEST CORRELATION</div><div class="siv" style="color:{ec_col}">\u03C1={ec_rho:+.3f}</div></div><div class="si"><div class="sil">OPTIMAL LAG</div><div class="siv">{ec_lag} months</div><div class="sis">MAUDE leads stock by this much</div></div><div class="si"><div class="sil">SIGNIFICANT?</div><div class="siv {"pos" if ec_sig else "neg"}">{"YES (p={:.3f})".format(ec_p) if ec_sig else "NO (p={:.3f})".format(ec_p)}</div></div></div>'
+            # Lag table
+            lag_results=ec.get("lag_results",{})
+            if lag_results:
+                ec_content+='<div class="msub"><strong>Lag-by-lag breakdown:</strong></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:3px;margin:4px 0 8px">'
+                for lag_name in sorted(lag_results.keys()):
+                    lr=lag_results[lag_name]; lr_rho=lr["rho"]; lr_p=lr["p"]
+                    lr_col="#c0392b" if lr_rho<-0.2 and lr_p<0.05 else "#27ae60" if lr_rho>0.2 and lr_p<0.05 else "var(--tx3)"
+                    star=" *" if lr_p<0.05 else ""
+                    ec_content+=f'<div class="si" style="padding:4px 6px"><div class="sil">{lag_name} lag</div><div class="siv" style="font-size:13px;color:{lr_col}">{lr_rho:+.3f}{star}</div></div>'
+                ec_content+='</div>'
+            ec_content+=f'<div class="msub"><strong>How to read:</strong> \u03C1 (rho) ranges from -1 to +1. Negative = MAUDE spikes predict stock declines. The lag tells you how many months ahead the signal fires. * means p&lt;0.05. '
+            if ec_sig and ec_rho<-0.2:
+                ec_content+=f'<strong>ACTIONABLE:</strong> MAUDE reports at {ec_lag}-month lag show statistically significant negative correlation with stock returns. When reports spike, the stock tends to decline {ec_lag} months later. That {ec_lag}-month window is your trading alpha.'
+            elif ec_sig and ec_rho>0.2:
+                ec_content+='The positive correlation suggests the market is already pricing in MAUDE data in real-time — less alpha available from this signal alone.'
+            else:
+                ec_content+='No statistically significant relationship detected. MAUDE data alone may not predict stock moves for this name — combine with other signals.'
+            ec_content+='</div>'
+            acc_html+=_accordion(f"corr-{tk}","MAUDE-Stock Correlation",f'<span class="mstat" style="color:{ec_col}">\u03C1={ec_rho:+.3f}</span>',ec_content)
         # 5. R-Score Backtest
         bt=all_r.get("backtest")
         if bt and isinstance(bt,dict):
@@ -833,23 +1059,48 @@ def generate_html(all_res,summary):
                     wcol="pos" if res["avg_return"]<0 else "neg"
                     bt_content+=f'<div class="msub">{window}: avg return <span class="{wcol}">{res["avg_return"]:+.1f}%</span>, win rate {res["win_rate"]:.0f}% (n={res["n"]})</div>'
             acc_html+=_accordion(f"bt-{tk}","R-Score Backtest",f'<span class="mstat {"mok" if bt.get("status")=="ok" and bt.get("results") else "mwarn"}">{bt.get("status","N/A").upper()}</span>',bt_content)
-        # 6. Peer-Relative
+        # 5b. FDA Recalls (LIVE from openFDA)
+        recalls=all_r.get("recalls")
+        if recalls and isinstance(recalls,dict) and recalls.get("status")=="ok" and recalls.get("recalls"):
+            rc_content=f'<div class="msub"><strong>{recalls["total"]} recalls found.</strong> Most recent from openFDA recall database:</div>'
+            for rcl in recalls["recalls"]:
+                rc_cls_col="#c0392b" if "I" in rcl.get("classification","") and "II" not in rcl.get("classification","") else "#e67e22" if "II" in rcl.get("classification","") else "var(--tx3)"
+                rc_content+=f'<div style="border:1px solid var(--bd);border-radius:6px;padding:8px;margin:4px 0;border-left:3px solid {rc_cls_col}"><div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px"><span style="font-weight:700;color:{rc_cls_col}">{rcl.get("classification","")}</span><span style="color:var(--tx3)">{rcl.get("date_posted","")}</span></div><div class="msub" style="margin:0">{rcl.get("reason","")}</div><div style="font-size:9px;color:var(--tx3);margin-top:2px">{rcl.get("product","")}</div></div>'
+            rc_content+='<div class="msub" style="margin-top:6px"><strong>Class I</strong> = most serious (may cause death). <strong>Class II</strong> = may cause temporary health issues. <strong>Class III</strong> = unlikely to cause harm. Live from openFDA recall endpoint.</div>'
+            acc_html+=_accordion(f"rc-{tk}","FDA Recalls (Live)",f'<span class="mstat" style="color:#c0392b">{recalls["total"]} RECALLS</span>',rc_content)
+        # 6. Peer-Relative — show full ranking table
         pr=all_r.get("peer_relative")
         if pr and isinstance(pr,dict):
             prcol="#c0392b" if pr.get("signal") in ("WORST","WEAK") else "#27ae60" if pr.get("signal") in ("BEST","STRONG") else "var(--tx3)"
-            acc_html+=_accordion(f"pr-{tk}","Peer-Relative Position",f'<span class="mstat" style="color:{prcol}">{pr.get("signal","?")}</span>',
-                f'<div class="msub">{pr.get("message","")}</div><div class="msub"><strong>Trading implication:</strong> Long the cleanest name (lowest R-Score), short the dirtiest (highest R-Score). The spread between best and worst = the pairs trade opportunity.</div>')
-        # 7. Earnings Predictor
+            pr_content=f'<div class="sg" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px"><div class="si"><div class="sil">THIS COMPANY</div><div class="siv" style="color:{prcol}">{pr.get("signal","?")}</div></div><div class="si"><div class="sil">RANK</div><div class="siv">{pr.get("rank","?")}/{pr.get("total","?")}</div><div class="sis">1 = cleanest FDA profile</div></div><div class="si"><div class="sil">PEER AVG R-SCORE</div><div class="siv">{pr.get("peer_avg","\u2014")}</div><div class="sis">vs this company: {pr.get("r_score","\u2014")}</div></div></div>'
+            pr_content+=f'<div class="msub"><strong>Trading implication:</strong> '
+            if pr.get("signal") in ("WORST","WEAK"):
+                pr_content+=f'This company has the WORST quality profile vs peers. Pairs trade: short {tk}, long the cleanest name in the group. The R-Score spread between best and worst ({pr.get("r_score",0)-pr.get("peer_avg",0):+.0f} pts above avg) = the conviction level.'
+            elif pr.get("signal") in ("BEST","STRONG"):
+                pr_content+=f'This company has the CLEANEST quality profile vs peers. If you believe MAUDE quality predicts earnings, this is the long leg of the pairs trade.'
+            else:
+                pr_content+='Middle of the pack. No strong relative signal. Look at the individual product breakdown for more granular opportunities.'
+            pr_content+='</div>'
+            acc_html+=_accordion(f"pr-{tk}","Peer-Relative Position",f'<span class="mstat" style="color:{prcol}">{pr.get("signal","?")} ({pr.get("rank","?")}/{pr.get("total","?")})</span>',pr_content)
+        # 7. Earnings Predictor — show factor-by-factor score breakdown
         ep=all_r.get("earnings_pred")
         if ep and isinstance(ep,dict) and ep.get("status")=="ok":
             epcol="#c0392b" if ep["prediction"]=="LIKELY MISS" else "#27ae60" if ep["prediction"]=="LIKELY BEAT" else "var(--tx3)"
-            acc_html+=_accordion(f"ep-{tk}","Earnings Surprise Predictor",f'<span class="mstat" style="color:{epcol}">{ep["prediction"]}</span>',
-                f'<div class="msub">{ep.get("message","")}</div><div class="msub"><strong>How to use:</strong> Position before earnings. LIKELY MISS = puts or short. LIKELY BEAT = calls or long. Confidence above 60% = higher conviction. Combine with peer-relative for pairs.</div>')
-        # 8. Google Trends, Short Interest, Payer, International (framework modules)
+            ep_score=ep.get("score",50); ep_conf=ep.get("confidence",0)
+            ep_content=f'<div class="sg" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px"><div class="si"><div class="sil">PREDICTION</div><div class="siv" style="color:{epcol}">{ep["prediction"]}</div></div><div class="si"><div class="sil">CONFIDENCE</div><div class="siv">{ep_conf:.0f}%</div><div class="sis">higher = more conviction</div></div><div class="si"><div class="sil">RAW SCORE</div><div class="siv">{ep_score}/100</div><div class="sis">&lt;35=miss, 35-65=neutral, &gt;65=beat</div></div></div>'
+            ep_factors=ep.get("factors",[])
+            if ep_factors:
+                ep_content+='<div class="msub"><strong>Factor breakdown (what drove this prediction):</strong></div>'
+                for fct in ep_factors:
+                    fct_icon="\u274C" if any(w in fct.lower() for w in ["critical","elevated","worst","rising","miss"]) else "\u2705" if any(w in fct.lower() for w in ["low","clean","best","declining","beat"]) else "\u26A0\uFE0F"
+                    ep_content+=f'<div class="msub" style="padding-left:12px">{fct_icon} {fct}</div>'
+            ep_content+=f'<div class="msub" style="margin-top:6px"><strong>How to use:</strong> Position before earnings. LIKELY MISS at &gt;60% confidence = puts or short entry. LIKELY BEAT at &gt;60% = calls or long entry. Pair with peer-relative: short the LIKELY MISS name, long the LIKELY BEAT name for a hedged trade.</div>'
+            acc_html+=_accordion(f"ep-{tk}","Earnings Surprise Predictor",f'<span class="mstat" style="color:{epcol}">{ep["prediction"]} ({ep_conf:.0f}%)</span>',ep_content)
+        # 8. Framework modules — only show if they have REAL data (status=ok), hide otherwise
         for mod_key,mod_title in [("google_trends","Google Trends (Leading Indicator)"),("short_interest","Short Interest"),("payer","CMS Payer / Formulary"),("international","International (MHRA/UK)")]:
             mod=all_r.get(mod_key)
-            if mod and isinstance(mod,dict):
-                acc_html+=_accordion(f"{mod_key}-{tk}",mod_title,f'<span class="mstat mwarn">{mod.get("status","N/A").upper()}</span>',f'<div class="msub">{mod.get("message","")}</div>')
+            if mod and isinstance(mod,dict) and mod.get("status")=="ok":
+                acc_html+=_accordion(f"{mod_key}-{tk}",mod_title,f'<span class="mstat mok">OK</span>',f'<div class="msub">{mod.get("message","")}</div>')
         # PRODUCT CARDS (non-_ALL devices for this company)
         cards_html=""
         for did,r in all_res.items():
@@ -870,13 +1121,23 @@ def generate_html(all_res,summary):
     tab_btns+='</div>'
     modules_str="ALL 13 MODULES" if HAS_MODULES else "BASIC"
     updated_str=datetime.now().strftime('%b %d, %Y %H:%M ET')
+    rev_stale=get_revenue_staleness()
+    rev_color="#c0392b" if rev_stale["status"]=="STALE" else "#e67e22" if rev_stale["status"]=="AGING" else "#27ae60"
+    stock_note=f"Stock prices: LIVE via yfinance" if live_stocks else "Stock prices: HARDCODED (yfinance not available)"
+
+    stock_note = _stock_source if '_stock_source' in dir() else "HARDCODED"
 
     html_top=f'''<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MAUDE Monitor V3.1</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">'''
+    # CSS stays exactly the same — inserted below
+    html_top+=f'''<style>
+:root{{--g:#2B5F3A;--gx:#e8f5ec;--gp:#f4faf6;--bg:#fff;--bg2:#f8faf9;--bg3:#f0f3f1;--tx:#1a2a1f;--tx2:#4a5f50;--tx3:#7a8f80;--bd:#d4e0d8;--red:#c0392b;--org:#e67e22}}</style></head><body><div class="ct">
+<header><div><h1>MAUDE Monitor V3.1</h1><div class="sub">FDA Adverse Event Intelligence \u2014 Diabetes Devices \u2014 7 Companies, {len(DEVICES)} Products</div></div>
+<div class="meta">Updated {updated_str}<br>Modules: {modules_str}<br>Stock: {stock_note}<br><span style="color:{rev_color}">Revenue: {rev_stale["message"]}</span></div></header>'''
 <style>
 :root{{--g:#2B5F3A;--gx:#e8f5ec;--gp:#f4faf6;--bg:#fff;--bg2:#f8faf9;--bg3:#f0f3f1;--tx:#1a2a1f;--tx2:#4a5f50;--tx3:#7a8f80;--bd:#d4e0d8;--red:#c0392b;--org:#e67e22}}
 *{{margin:0;padding:0;box-sizing:border-box}}body{{background:var(--bg);color:var(--tx);font-family:'Inter',system-ui,sans-serif;font-size:14px;line-height:1.6}}
