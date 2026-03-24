@@ -1,5 +1,5 @@
 {
-  "generated": "2026-03-23T17:20:37.449053",
+  "generated": "2026-03-24T19:37:56.251671",
   "devices": [
     {
       "id": "DXCM_G7_15DAY",
@@ -36,7 +36,7 @@
       "r_score": 84.8,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": 0.1915,
+      "corr_rho": 0.1585,
       "corr_sig": false
     },
     {
@@ -55,7 +55,7 @@
       "r_score": 12.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": -0.221,
+      "corr_rho": 0.1755,
       "corr_sig": false
     },
     {
@@ -74,7 +74,7 @@
       "r_score": 0.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": -0.3039,
+      "corr_rho": -0.5105,
       "corr_sig": false
     },
     {
@@ -93,7 +93,7 @@
       "r_score": 12.0,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": -0.2167,
+      "corr_rho": 0.267,
       "corr_sig": false
     },
     {
@@ -112,7 +112,7 @@
       "r_score": 72.1,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": -0.312,
+      "corr_rho": 0.2309,
       "corr_sig": false
     },
     {
@@ -131,7 +131,7 @@
       "r_score": 5.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.4897,
+      "corr_rho": 0.1681,
       "corr_sig": false
     },
     {
@@ -150,7 +150,7 @@
       "r_score": 6.2,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": -0.2598,
+      "corr_rho": -0.1657,
       "corr_sig": false
     },
     {
@@ -169,7 +169,7 @@
       "r_score": 3.7,
       "signal": "NORMAL",
       "batch": true,
-      "corr_rho": 0.567,
+      "corr_rho": 0.2123,
       "corr_sig": false
     },
     {
@@ -188,7 +188,7 @@
       "r_score": 10.5,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": -0.2467,
+      "corr_rho": 0.2854,
       "corr_sig": false
     },
     {
@@ -207,7 +207,7 @@
       "r_score": 6.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0.2468,
+      "corr_rho": -0.2096,
       "corr_sig": false
     },
     {
@@ -226,7 +226,7 @@
       "r_score": 6.8,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": 0.431,
+      "corr_rho": 0.1169,
       "corr_sig": false
     },
     {
@@ -245,7 +245,7 @@
       "r_score": 81.7,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0.2069,
+      "corr_rho": -0.1325,
       "corr_sig": false
     },
     {
@@ -264,7 +264,7 @@
       "r_score": 3.0,
       "signal": "NORMAL",
       "batch": false,
-      "corr_rho": -0.2838,
+      "corr_rho": -0.2617,
       "corr_sig": false
     },
     {
@@ -283,7 +283,7 @@
       "r_score": 76.1,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": 0.2464,
+      "corr_rho": -0.2639,
       "corr_sig": false
     },
     {
@@ -302,8 +302,8 @@
       "r_score": 91.1,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": -0.8929,
-      "corr_sig": true
+      "corr_rho": -0.8214,
+      "corr_sig": false
     },
     {
       "id": "BBNX_ALL",
@@ -321,8 +321,8 @@
       "r_score": 91.1,
       "signal": "CRITICAL",
       "batch": true,
-      "corr_rho": -0.8929,
-      "corr_sig": true
+      "corr_rho": -0.8214,
+      "corr_sig": false
     },
     {
       "id": "MDT_SIMPLERA",
@@ -340,7 +340,7 @@
       "r_score": 98.5,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": -0.3298,
+      "corr_rho": -0.1985,
       "corr_sig": false
     },
     {
@@ -359,7 +359,7 @@
       "r_score": 98.5,
       "signal": "CRITICAL",
       "batch": false,
-      "corr_rho": -0.3298,
+      "corr_rho": -0.1985,
       "corr_sig": false
     },
     {
@@ -377,6 +377,63 @@
       "injuries_3mo": 19,
       "r_score": 72.9,
       "signal": "CRITICAL",
+      "batch": false,
+      "corr_rho": null,
+      "corr_sig": null
+    },
+    {
+      "id": "PRCT_AQUABEAM",
+      "name": "AquaBeam Robotic System",
+      "ticker": "PRCT",
+      "company": "Procept BioRobotics",
+      "month": "2026-02",
+      "reports": 9,
+      "z_score": -0.73,
+      "rate_per_m": null,
+      "rate_per_10k": null,
+      "slope_6m": -0.63,
+      "deaths_3mo": 2,
+      "injuries_3mo": 17,
+      "r_score": 28.8,
+      "signal": "NORMAL",
+      "batch": true,
+      "corr_rho": null,
+      "corr_sig": null
+    },
+    {
+      "id": "INSP_INSPIRE",
+      "name": "Inspire Sleep System",
+      "ticker": "INSP",
+      "company": "Inspire Medical Systems",
+      "month": "2026-02",
+      "reports": 3,
+      "z_score": -0.32,
+      "rate_per_m": null,
+      "rate_per_10k": null,
+      "slope_6m": -0.14,
+      "deaths_3mo": 0,
+      "injuries_3mo": 6,
+      "r_score": 22.1,
+      "signal": "NORMAL",
+      "batch": false,
+      "corr_rho": null,
+      "corr_sig": null
+    },
+    {
+      "id": "CVRX_BAROSTIM",
+      "name": "Barostim System",
+      "ticker": "CVRX",
+      "company": "CVRx",
+      "month": "2026-02",
+      "reports": 10,
+      "z_score": -0.37,
+      "rate_per_m": null,
+      "rate_per_10k": null,
+      "slope_6m": -0.97,
+      "deaths_3mo": 3,
+      "injuries_3mo": 29,
+      "r_score": 22.5,
+      "signal": "NORMAL",
       "batch": false,
       "corr_rho": null,
       "corr_sig": null
