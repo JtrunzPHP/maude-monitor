@@ -28,6 +28,9 @@ jobs:
       - name: Create data directories
         run: mkdir -p data docs
 
+      - name: Install dependencies
+        run: pip install yfinance
+
       - name: Run MAUDE Monitor
         env:
           MAUDE_EMAIL_TO: ${{ secrets.MAUDE_EMAIL_TO }}
