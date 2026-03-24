@@ -88,7 +88,7 @@ td{padding:7px 10px;border-bottom:1px solid var(--bd);font-size:12px;white-space
 .cs-intro{font-size:14px;color:var(--tx2);line-height:1.7;margin-bottom:24px;max-width:900px}
 </style></head><body><div class="ct">
 <header><div><h1>MAUDE Monitor V3.2</h1><div class="sub">FDA Adverse Event Intelligence — 10 Companies, 24 Products</div></div>
-<div class="meta">Updated Mar 24, 2026 20:09 ET<br>Modules: ALL 13 MODULES<br>Stock: LIVE (6 tickers via yfinance)<br><span style="color:#27ae60">Revenue: Revenue data updated 1 days ago.</span></div></header>
+<div class="meta">Updated Mar 24, 2026 20:26 ET<br>Modules: ALL 13 MODULES<br>Stock: LIVE (6 tickers via yfinance)<br><span style="color:#27ae60">Revenue: Revenue data updated 1 days ago.</span></div></header>
 <div class="tabs"><button class="tab active" onclick="showTab('summary')">Summary</button><button class="tab" onclick="showTab('dexcom')">Dexcom</button><button class="tab" onclick="showTab('insulet')">Insulet</button><button class="tab" onclick="showTab('tandem')">Tandem</button><button class="tab" onclick="showTab('abbott')">Abbott</button><button class="tab" onclick="showTab('bbnx')">Beta Bionics</button><button class="tab" onclick="showTab('medtronic')">Medtronic</button><button class="tab" onclick="showTab('sequel')">Sequel Med Tech</button><button class="tab" onclick="showTab('prct')">Procept BioRobotics</button><button class="tab" onclick="showTab('insp')">Inspire Medical Systems</button><button class="tab" onclick="showTab('cvrx')">CVRx</button><button class="tab" onclick="showTab('casestudies')">Case Studies</button></div>
 <div class="tabcontent active" id="tc-summary">
 <div class="guide"><h3>How to Read This Dashboard</h3><div class="gg">
@@ -535,41 +535,6 @@ else if(v==="stock"){var sp=D.sp||{};var sl=[],sv=[],sc=[];D.l.forEach(function(
 charts[did]=new Chart(ctx,{type:"line",data:{labels:D.l,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#4a5f50",font:{size:10}},title:{display:true,text:yL,color:"#4a5f50",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},pinch:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,callbacks:{afterBody:function(it){var idx=it[0].dataIndex;var month=D.l[idx];var msgs=[];if(bm.indexOf(month)>=0)msgs.push("BATCH REPORTING");evts.forEach(function(e){if(e.date===month)msgs.push(e.type+": "+e.desc);});return msgs.length?"\n"+msgs.join("\n"):"";}}}}});}
 function af(){var co=document.getElementById("fc").value;var sig=document.getElementById("fs").value;var vw=document.getElementById("fv").value;var so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3};document.querySelectorAll(".pr,.card").forEach(function(el){var sh=true;var ec=el.getAttribute("data-co");var es=el.getAttribute("data-sig");var ic=el.getAttribute("data-comb")==="1";if(co!=="all"&&ec!==co)sh=false;if(sig!=="all"){var sv=so[es]||3;if(sig==="CRITICAL"&&es!=="CRITICAL")sh=false;if(sig==="ELEVATED"&&sv>1)sh=false;if(sig==="WATCH"&&sv>2)sh=false;}if(vw==="combined"&&!ic)sh=false;if(vw==="individual"&&ic)sh=false;el.style.display=sh?"":"none";});}
 document.addEventListener("DOMContentLoaded",init);
-
-var cs_data={"PRCT": {"months": ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"], "maude": [9, 13, 20, 18, 20, 22, 24, 12, 15, 29, 35, 35, 17, 26, 51, 17, 26, 23, 35, 28, 14, 16, 9, 16, 25, 26, 39, 20, 17, 21, 24, 10, 13, 9, 7, 11, 7, 9], "stock": [38.89, 37.45, 28.4, 30.39, 33.45, 35.35, 34.44, 34.11, 32.81, 26.79, 37.07, 41.91, 46.3, 48.34, 49.42, 52.98, 66.4, 61.09, 63.32, 79.0, 80.12, 90.0, 95.59, 80.52, 72.5, 64.34, 58.26, 53.98, 58.0, 57.6, 48.51, 40.17, 35.69, 34.03, 31.68, 31.46, 28.96, 22.69], "events": [{"date": "2021-09", "type": "IPO", "desc": "IPO at ~$25/share"}, {"date": "2022-05", "type": "RECALL", "desc": "Class 2 Recall - AquaBeam system"}, {"date": "2024-12", "type": "PEAK", "desc": "Stock peaks ~$100"}, {"date": "2025-10", "type": "RECALL", "desc": "Class 2 Recall - AquaBeam Handpiece"}, {"date": "2026-01", "type": "LEGAL", "desc": "Securities fraud investigations launched"}], "optimal_lag": {"lag": 0, "corr": -0.163}, "hit_rate": 20.0}, "INSP": {"months": ["2023-01", "2023-02", "2023-03", "2023-04", "2023-06", "2023-07", "2023-08", "2023-09", "2023-11", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"], "maude": [2, 3, 1, 2, 4, 1, 2, 4, 2, 2, 1, 5, 3, 1, 1, 4, 1, 1, 6, 2, 5, 8, 3, 1, 1, 3, 3, 7, 8, 3, 5, 4, 2, 4, 3], "stock": [253.06, 259.93, 234.07, 267.63, 324.64, 287.81, 226.88, 198.44, 145.31, 210.87, 179.04, 214.79, 241.66, 158.79, 133.83, 141.05, 179.82, 211.05, 195.04, 192.76, 185.38, 193.5, 185.59, 159.28, 158.38, 138.2, 129.77, 124.54, 93.69, 74.2, 72.08, 124.41, 92.23, 75.78, 64.51], "events": [{"date": "2023-07", "type": "PEAK", "desc": "Stock peaks ~$326 (ATH)"}, {"date": "2024-06", "type": "RECALL", "desc": "Class I Recall - Inspire IV IPG 3028"}, {"date": "2024-07", "type": "FDA", "desc": "FDA labels recall most serious type"}, {"date": "2025-08", "type": "CRASH", "desc": "Inspire V launch failure, -$42 drop"}, {"date": "2025-12", "type": "LEGAL", "desc": "Securities fraud lawsuit filed"}], "optimal_lag": {"lag": 2, "corr": -0.177}, "hit_rate": 33.3}, "CVRX": {"months": ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"], "maude": [2, 2, 3, 7, 7, 6, 7, 8, 7, 4, 4, 2, 4, 7, 8, 5, 10, 8, 13, 4, 7, 7, 11, 8, 10, 8, 6, 14, 10, 9, 18, 9, 11, 21, 8, 12, 10, 10], "stock": [15.2, 11.12, 9.32, 11.64, 12.52, 15.44, 17.93, 17.35, 15.17, 13.38, 20.47, 31.44, 25.12, 19.63, 18.21, 15.51, 6.95, 11.99, 8.55, 9.86, 8.81, 13.12, 15.32, 12.67, 15.98, 12.96, 12.23, 7.32, 6.64, 5.88, 7.96, 7.85, 8.07, 10.19, 9.81, 7.1, 6.85, 8.16], "events": [{"date": "2024-01", "type": "MGMT", "desc": "CEO Yared retires, Hykes appointed"}, {"date": "2024-10", "type": "REIMB", "desc": "MS-DRG 276 reassignment (~$43K)"}, {"date": "2025-02", "type": "DATA", "desc": "Real-world evidence at THT 2025"}, {"date": "2025-05", "type": "EARN", "desc": "Q1 2025: revenue miss"}, {"date": "2026-01", "type": "REIMB", "desc": "Category I CPT codes effective"}], "optimal_lag": {"lag": 2, "corr": -0.258}, "hit_rate": 50.0}};
-
-function initCaseStudies(){
-if(!window.cs_data)return;
-for(var tk in cs_data){
-var cs=cs_data[tk];
-var ctx=document.getElementById("cs-ch-"+tk);
-if(!ctx)continue;
-var barC=cs.months.map(function(m,i){return "rgba(192,57,43,0.25)";});
-new Chart(ctx,{
-type:"bar",
-data:{labels:cs.months,datasets:[
-{label:"MAUDE Reports",data:cs.maude,backgroundColor:barC,borderColor:"rgba(192,57,43,0.7)",borderWidth:1,yAxisID:"y",order:2},
-{label:"Stock ($)",data:cs.stock,type:"line",borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:1.5,tension:0.2,yAxisID:"y1",order:1}
-]},
-options:{
-responsive:true,
-maintainAspectRatio:false,
-interaction:{mode:"index",intersect:false},
-scales:{
-x:{ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
-y:{position:"left",ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}},
-y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}}
-},
-plugins:{
-legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
-zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},mode:"x"}}
-}
-}
-});
-}
-}
-
-document.addEventListener("DOMContentLoaded",function(){{initCaseStudies();}});
 </script><div id="tc-casestudies" class="tabcontent">
 <h2>Case Studies: MAUDE Signal &#8594; Stock Price</h2>
 <p class="cs-intro">These case studies examine historical instances where rising MAUDE adverse event reports preceded significant stock price movements. A negative correlation at lag N means a MAUDE spike in month T predicted a stock decline around month T+N.</p>
@@ -660,4 +625,40 @@ document.addEventListener("DOMContentLoaded",function(){{initCaseStudies();}});
 </div>
 </div>
 
+<script>
+var cs_data={"PRCT": {"months": ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"], "maude": [9, 13, 20, 18, 20, 22, 24, 12, 15, 29, 35, 35, 17, 26, 51, 17, 26, 23, 35, 28, 14, 16, 9, 16, 25, 26, 39, 20, 17, 21, 24, 10, 13, 9, 7, 11, 7, 9], "stock": [38.89, 37.45, 28.4, 30.39, 33.45, 35.35, 34.44, 34.11, 32.81, 26.79, 37.07, 41.91, 46.3, 48.34, 49.42, 52.98, 66.4, 61.09, 63.32, 79.0, 80.12, 90.0, 95.59, 80.52, 72.5, 64.34, 58.26, 53.98, 58.0, 57.6, 48.51, 40.17, 35.69, 34.03, 31.68, 31.46, 28.96, 22.69], "events": [{"date": "2021-09", "type": "IPO", "desc": "IPO at ~$25/share"}, {"date": "2022-05", "type": "RECALL", "desc": "Class 2 Recall - AquaBeam system"}, {"date": "2024-12", "type": "PEAK", "desc": "Stock peaks ~$100"}, {"date": "2025-10", "type": "RECALL", "desc": "Class 2 Recall - AquaBeam Handpiece"}, {"date": "2026-01", "type": "LEGAL", "desc": "Securities fraud investigations launched"}], "optimal_lag": {"lag": 0, "corr": -0.163}, "hit_rate": 20.0}, "INSP": {"months": ["2023-01", "2023-02", "2023-03", "2023-04", "2023-06", "2023-07", "2023-08", "2023-09", "2023-11", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"], "maude": [2, 3, 1, 2, 4, 1, 2, 4, 2, 2, 1, 5, 3, 1, 1, 4, 1, 1, 6, 2, 5, 8, 3, 1, 1, 3, 3, 7, 8, 3, 5, 4, 2, 4, 3], "stock": [253.06, 259.93, 234.07, 267.63, 324.64, 287.81, 226.88, 198.44, 145.31, 210.87, 179.04, 214.79, 241.66, 158.79, 133.83, 141.05, 179.82, 211.05, 195.04, 192.76, 185.38, 193.5, 185.59, 159.28, 158.38, 138.2, 129.77, 124.54, 93.69, 74.2, 72.08, 124.41, 92.23, 75.78, 64.51], "events": [{"date": "2023-07", "type": "PEAK", "desc": "Stock peaks ~$326 (ATH)"}, {"date": "2024-06", "type": "RECALL", "desc": "Class I Recall - Inspire IV IPG 3028"}, {"date": "2024-07", "type": "FDA", "desc": "FDA labels recall most serious type"}, {"date": "2025-08", "type": "CRASH", "desc": "Inspire V launch failure, -$42 drop"}, {"date": "2025-12", "type": "LEGAL", "desc": "Securities fraud lawsuit filed"}], "optimal_lag": {"lag": 2, "corr": -0.177}, "hit_rate": 33.3}, "CVRX": {"months": ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"], "maude": [2, 2, 3, 7, 7, 6, 7, 8, 7, 4, 4, 2, 4, 7, 8, 5, 10, 8, 13, 4, 7, 7, 11, 8, 10, 8, 6, 14, 10, 9, 18, 9, 11, 21, 8, 12, 10, 10], "stock": [15.2, 11.12, 9.32, 11.64, 12.52, 15.44, 17.93, 17.35, 15.17, 13.38, 20.47, 31.44, 25.12, 19.63, 18.21, 15.51, 6.95, 11.99, 8.55, 9.86, 8.81, 13.12, 15.32, 12.67, 15.98, 12.96, 12.23, 7.32, 6.64, 5.88, 7.96, 7.85, 8.07, 10.19, 9.81, 7.1, 6.85, 8.16], "events": [{"date": "2024-01", "type": "MGMT", "desc": "CEO Yared retires, Hykes appointed"}, {"date": "2024-10", "type": "REIMB", "desc": "MS-DRG 276 reassignment (~$43K)"}, {"date": "2025-02", "type": "DATA", "desc": "Real-world evidence at THT 2025"}, {"date": "2025-05", "type": "EARN", "desc": "Q1 2025: revenue miss"}, {"date": "2026-01", "type": "REIMB", "desc": "Category I CPT codes effective"}], "optimal_lag": {"lag": 2, "corr": -0.258}, "hit_rate": 50.0}};
+
+function initCaseStudies(){
+if(!window.cs_data)return;
+for(var tk in cs_data){
+var cs=cs_data[tk];
+var ctx=document.getElementById("cs-ch-"+tk);
+if(!ctx)continue;
+var barC=cs.months.map(function(m,i){return "rgba(192,57,43,0.25)";});
+new Chart(ctx,{
+type:"bar",
+data:{labels:cs.months,datasets:[
+{label:"MAUDE Reports",data:cs.maude,backgroundColor:barC,borderColor:"rgba(192,57,43,0.7)",borderWidth:1,yAxisID:"y",order:2},
+{label:"Stock ($)",data:cs.stock,type:"line",borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:1.5,tension:0.2,yAxisID:"y1",order:1}
+]},
+options:{
+responsive:true,
+maintainAspectRatio:false,
+interaction:{mode:"index",intersect:false},
+scales:{
+x:{ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
+y:{position:"left",ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}},
+y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}}
+},
+plugins:{
+legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
+zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},mode:"x"}}
+}
+}
+});
+}
+}
+
+window.addEventListener("load",function(){initCaseStudies();});
+</script>
 </body></html>
