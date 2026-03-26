@@ -4,60 +4,107 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root{--bg:#f8f9fa;--card:#fff;--tx1:#1a1a2e;--tx2:#444;--tx3:#888;--bdr:#e0e0e0;--acc:#f0f4f8}
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--tx1);padding:12px;max-width:1400px;margin:0 auto}
-h1{font-size:1.5em;margin-bottom:4px}h2{font-size:1.2em;margin:16px 0 8px}
-.hdr{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:16px 20px;border-radius:12px;margin-bottom:16px}.hdr small{opacity:0.7;font-size:12px}.hdr .warn{color:#f39c12}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--tx1);padding:12px;max-width:1400px;margin:0 auto}
+h1{font-size:1.5em;margin-bottom:4px} h2{font-size:1.2em;margin:16px 0 8px}
+.hdr{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:16px 20px;border-radius:12px;margin-bottom:16px}
+.hdr small{opacity:0.7;font-size:12px} .hdr .warn{color:#f39c12;font-size:11px}
 .tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px;background:var(--card);padding:8px;border-radius:8px;border:1px solid var(--bdr)}
-.tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;border:none;background:transparent;color:var(--tx2)}.tab:hover{background:var(--acc)}.tab.active{background:#1a1a2e;color:#fff}
-.tabcontent{display:none}.tabcontent.active{display:block}
+.tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;border:none;background:transparent;color:var(--tx2)}
+.tab:hover{background:var(--acc)} .tab.active{background:#1a1a2e;color:#fff}
+.tabcontent{display:none} .tabcontent.active{display:block}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}
-.ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.cn{font-weight:700;font-size:14px}.cs{padding:2px 8px;border-radius:4px;color:#fff;font-size:11px;font-weight:600}
-.sg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}.si{text-align:center;padding:4px;background:var(--acc);border-radius:6px}.sil{font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.5px}.siv{font-size:16px;font-weight:700;margin-top:2px}
-.cc{margin:8px 0}.cbtns{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}.cb{padding:3px 8px;border:1px solid var(--bdr);border-radius:4px;cursor:pointer;font-size:11px;background:var(--card)}.cb:hover{background:var(--acc)}.cb.active{background:#1a1a2e;color:#fff;border-color:#1a1a2e}.cb.rst{background:transparent;border-style:dashed;font-size:10px}
-.cdesc{font-size:11px;color:var(--tx3);margin-bottom:4px;min-height:14px}.cwrap{height:220px;position:relative}
-.mods{margin-top:10px}.acc{border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px;overflow:hidden}.acch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;cursor:pointer;font-size:12px;font-weight:600;background:var(--acc)}.acch:hover{background:#e4e8ee}.accb{padding:10px;font-size:12px}.arr{font-size:10px;transition:transform 0.2s}.arr.open{transform:rotate(90deg)}.mstat{font-size:12px;font-weight:600;margin:0 8px}.msub{font-size:12px;color:var(--tx2);line-height:1.5;margin:4px 0}
-.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px}.filters select{padding:4px 8px;border:1px solid var(--bdr);border-radius:4px;font-size:12px}
-table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--bdr)}th{background:var(--acc);font-weight:600;font-size:11px;text-transform:uppercase}
+.ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.cn{font-weight:700;font-size:14px} .cs{padding:2px 8px;border-radius:4px;color:#fff;font-size:11px;font-weight:600}
+.sg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}
+.si{text-align:center;padding:4px;background:var(--acc);border-radius:6px}
+.sil{font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.5px}
+.siv{font-size:16px;font-weight:700;margin-top:2px}
+.cc{margin:8px 0} .cbtns{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.cb{padding:3px 8px;border:1px solid var(--bdr);border-radius:4px;cursor:pointer;font-size:11px;background:var(--card)}
+.cb:hover{background:var(--acc)} .cb.active{background:#1a1a2e;color:#fff;border-color:#1a1a2e}
+.cb.rst{background:transparent;border-style:dashed;font-size:10px}
+.cdesc{font-size:11px;color:var(--tx3);margin-bottom:4px;min-height:14px}
+.cwrap{height:220px;position:relative}
+.mods{margin-top:10px}
+.acc{border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px;overflow:hidden}
+.acch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;cursor:pointer;font-size:12px;font-weight:600;background:var(--acc)}
+.acch:hover{background:#e4e8ee}
+.accb{padding:10px;font-size:12px}
+.arr{font-size:10px;transition:transform 0.2s} .arr.open{transform:rotate(90deg)}
+.mstat{font-size:12px;font-weight:600;margin:0 8px}
+.msub{font-size:12px;color:var(--tx2);line-height:1.5;margin:4px 0}
+.mok{color:#27ae60} .mwarn{color:#f39c12} .mcrit{color:#c0392b}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px}
+.filters select{padding:4px 8px;border:1px solid var(--bdr);border-radius:4px;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:12px} th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--bdr)}
+th{background:var(--acc);font-weight:600;font-size:11px;text-transform:uppercase}
 .disc{margin-top:20px;padding:12px;background:var(--acc);border-radius:8px;font-size:11px;color:var(--tx3);line-height:1.6}
+.gi{padding:8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px}
+.gi h4{font-size:12px;margin-bottom:4px} .gi p{font-size:11px;color:var(--tx2);line-height:1.4}
 </style></head><body>
-<div class="hdr"><h1>MAUDE Monitor V3.3 — Event-Date Smoothed Intelligence</h1>
-<small>Updated: 2026-03-26 15:23 ET | Stocks: LIVE (6 tickers) | 15 products | ✨ Smoothing: ON (batch-adjusted via event-date decomposition)</small><br>
-<small>Revenue: Current (11d) (updated 2026-03-15)</small></div>
-<div class="tabs"><div class="tab active" onclick="showTab('overview')">Overview</div><div class="tab" onclick="showTab('guide')">Guide</div><div class="tab" onclick="showTab('dexcom')">Dexcom</div><div class="tab" onclick="showTab('insulet')">Insulet</div><div class="tab" onclick="showTab('tandem')">Tandem</div><div class="tab" onclick="showTab('abbott')">Abbott</div><div class="tab" onclick="showTab('beta_bionics')">Beta Bionics</div><div class="tab" onclick="showTab('medtronic')">Medtronic</div><div class="tab" onclick="showTab('sequel')">Sequel</div></div><div class="tabcontent active" id="tc-overview">
-<div class="filters"><label>Company:</label><select id="fc" onchange="af()"><option value="all">All</option><option value="Dexcom">Dexcom</option><option value="Insulet">Insulet</option><option value="Tandem">Tandem</option><option value="Abbott">Abbott</option><option value="Beta Bionics">Beta Bionics</option><option value="Medtronic">Medtronic</option><option value="Sequel">Sequel</option></select><label>Signal:</label><select id="fs" onchange="af()"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="ELEVATED">Elevated+</option><option value="WATCH">Watch+</option></select>
-<label>View:</label><select id="fv" onchange="af()"><option value="all">All</option><option value="combined">Company-Level</option><option value="individual">Products</option></select></div>
-<h2>All Products — Latest Month (Smoothed)</h2><div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Ticker</th><th>Month</th><th>Reports(SM)</th><th>Z-Score</th><th>R-Score</th><th>Rate/$M</th><th>Rate/10K</th><th>Trend</th><th>Deaths</th><th>Injuries</th><th>Corr</th><th>Signal</th></tr></thead><tbody></tbody></table></div></div><div class="tabcontent" id="tc-guide"><h2>How to Read V3.3</h2>
+<div class="hdr">
+<h1>MAUDE Monitor V3.3 — Event-Date Smoothed Intelligence</h1>
+<small>Updated: 2026-03-26 15:44 ET | Stock data: LIVE (6 tickers via yfinance) | 15 products tracked | ✨ Smoothing: ON</small><br>
+<small>Revenue data: Current (11d) (last updated 2026-03-15)</small>
+</div>
+<div class="tabs">
+<div class="tab active" onclick="showTab('overview')">Overview</div>
+<div class="tab" onclick="showTab('guide')">Guide</div>
+<div class="tab" onclick="showTab('dexcom')">Dexcom</div>
+<div class="tab" onclick="showTab('insulet')">Insulet</div>
+<div class="tab" onclick="showTab('tandem')">Tandem</div>
+<div class="tab" onclick="showTab('abbott')">Abbott</div>
+<div class="tab" onclick="showTab('beta_bionics')">Beta Bionics</div>
+<div class="tab" onclick="showTab('medtronic')">Medtronic</div>
+<div class="tab" onclick="showTab('sequel')">Sequel</div></div>
+<div class="tabcontent active" id="tc-overview">
+<div class="filters"><label>Company:</label><select id="fc" onchange="af()"><option value="all">All</option><option value="Dexcom">Dexcom</option><option value="Insulet">Insulet</option><option value="Tandem">Tandem</option><option value="Abbott">Abbott</option><option value="Beta Bionics">Beta Bionics</option><option value="Medtronic">Medtronic</option><option value="Sequel">Sequel</option></select><label>Signal:</label><select id="fs" onchange="af()"><option value="all">All</option>
+<option value="CRITICAL">Critical</option><option value="ELEVATED">Elevated+</option>
+<option value="WATCH">Watch+</option></select>
+<label>View:</label><select id="fv" onchange="af()"><option value="all">All Products</option>
+<option value="combined">Company-Level Only</option><option value="individual">Individual Products Only</option></select></div><h2>All Products — Latest Month (Smoothed)</h2>
+<div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Ticker</th><th>Month</th><th>Reports(SM)</th><th>Z-Score</th><th>R-Score</th><th>Rate/$M</th><th>Rate/10K</th><th>6mo Trend</th><th>Deaths (3mo)</th><th>Injuries (3mo)</th><th>Corr</th><th>Signal</th></tr></thead><tbody></tbody></table></div>
+</div><div class="tabcontent" id="tc-guide">
+<h2>How to Read This Dashboard</h2>
 <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:8px">
-<div style="padding:8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px"><h4 style="font-size:12px;margin-bottom:4px">✨ Event-Date Smoothing (NEW)</h4><p style="font-size:11px;color:var(--tx2);line-height:1.4">Raw MAUDE data spikes when manufacturers batch-dump late reports (especially after recalls). V3.3 uses date_of_event as the TRUE signal and redistributes batch excess across prior months. The "Reports" chart shows RAW data. The "Smoothed" chart shows the adjusted signal. ALL analytics (Z-score, R-score, correlation, backtest) now run on smoothed data.</p></div>
-<div style="padding:8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px"><h4 style="font-size:12px;margin-bottom:4px">Multi-Signal Correlation</h4><p style="font-size:11px;color:var(--tx2);line-height:1.4">Tests 6 MAUDE signals (raw, delta, z-score, rate/$M, rate/10K, acceleration) against stock returns at 0-6mo lags on SMOOTHED data. Confidence 0-100 combines strength, significance, consistency.</p></div>
-<div style="padding:8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px"><h4 style="font-size:12px;margin-bottom:4px">Case Study Backtest</h4><p style="font-size:11px;color:var(--tx2);line-height:1.4">Specific trade signals with entry/exit/P&L. Uses smoothed z-scores. Batch months auto-excluded. Grade: STRONG (≥60% hit), MODERATE (≥45%), WEAK (&lt;45%).</p></div>
-<div style="padding:8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px"><h4 style="font-size:12px;margin-bottom:4px">R-Score &amp; Z-Score</h4><p style="font-size:11px;color:var(--tx2);line-height:1.4">Now computed on smoothed data. Z≥2=anomalous. R-Score 0-100 composite risk. Both are dramatically more accurate without batch-dump noise.</p></div>
+<div class="gi"><h4>✨ Event-Date Smoothing (NEW in V3.3)</h4><p>Raw MAUDE data spikes when manufacturers batch-dump late reports (especially after recalls). V3.3 uses date_of_event as the TRUE signal and redistributes batch excess across prior months. "Reports" chart = RAW. "Smoothed" chart = adjusted. ALL analytics run on smoothed data.</p></div>
+<div class="gi"><h4>R-Score (0-100)</h4><p>Composite risk score. 0=safe, 100=critical. Weights: Z-score (20), trend (20), deaths (20), injuries (20), rate (20). R≥50=investigate, R≥70=act. Now computed on smoothed data.</p></div>
+<div class="gi"><h4>Z-Score</h4><p>Standard deviations from mean on smoothed data. Z≥2=anomalous (95th percentile). Z≥3=extreme. Negative=below average reporting.</p></div>
+<div class="gi"><h4>Rate/$M Revenue</h4><p>Smoothed reports per $M revenue. Normalizes for business SIZE. Rising = quality deteriorating relative to revenue.</p></div>
+<div class="gi"><h4>Rate/10K Users</h4><p>Smoothed reports per 10K installed base. More precise than Rate/$M. Sources: earnings calls, 10-K filings.</p></div>
+<div class="gi"><h4>6mo Trend (Slope)</h4><p>Linear regression slope of last 6 months of smoothed data. +50 means reports increasing ~50/month. Positive = accelerating problem.</p></div>
+<div class="gi"><h4>Deaths/Injuries (3mo)</h4><p>Event counts from most recent 3 months. Deaths weighted 10x in severity score. MAUDE-reported, not confirmed causal.</p></div>
+<div class="gi"><h4>Batch Detection</h4><p>Orange bars on charts. V3.3: compares date_received vs date_of_event. Excess = batch dump. Smoothed view strips this noise. Prevents false DXCM flags from 700K+ receiver recall.</p></div>
+<div class="gi"><h4>Multi-Signal Correlation</h4><p>Tests 6 MAUDE signals (raw, delta, z-score, rate/$M, rate/10K, acceleration) against stock returns at 0-6mo lags. Confidence 0-100. Rate-normalized signals strip installed base growth noise. Runs on smoothed data.</p></div>
+<div class="gi"><h4>Case Study Backtest</h4><p>PM-ready trade signals: date, entry price, exit price, P&L. Grade (STRONG/MODERATE/WEAK) based on hit rate. Batch months auto-excluded. Uses smoothed z-scores.</p></div>
 </div></div>
-<div class="tabcontent" id="tc-dexcom"></div>
-<div class="tabcontent" id="tc-insulet"></div>
-<div class="tabcontent" id="tc-tandem"></div>
-<div class="tabcontent" id="tc-abbott"></div>
-<div class="tabcontent" id="tc-beta_bionics"></div>
-<div class="tabcontent" id="tc-medtronic"></div>
-<div class="tabcontent" id="tc-sequel"></div>
-<div class="disc">V3.3 uses event-date smoothing to strip batch-dump noise. Research only, not investment advice. MAUDE has 30-90d lag. Correlation≠causation. Heuristic models, not ML.</div></div><script>
+<div class="tabcontent" id="tc-dexcom"><h2>Dexcom</h2><div class="grid"></div></div>
+<div class="tabcontent" id="tc-insulet"><h2>Insulet</h2><div class="grid"></div></div>
+<div class="tabcontent" id="tc-tandem"><h2>Tandem</h2><div class="grid"></div></div>
+<div class="tabcontent" id="tc-abbott"><h2>Abbott</h2><div class="grid"></div></div>
+<div class="tabcontent" id="tc-beta_bionics"><h2>Beta Bionics</h2><div class="grid"></div></div>
+<div class="tabcontent" id="tc-medtronic"><h2>Medtronic</h2><div class="grid"></div></div>
+<div class="tabcontent" id="tc-sequel"><h2>Sequel</h2><div class="grid"></div></div>
+<div class="disc">V3.3: Event-date smoothing strips batch-dump noise. Research only. Not investment advice. MAUDE has known limitations including 30-90 day reporting lag. Revenue from SEC filings. Installed base from earnings calls. MDT stock = parent company (~8% diabetes). BBNX from Feb 2025 IPO. Sequel is private. R-Score and Earnings Predictor use heuristic scoring, not ML. Correlation is not causation.</div></div><script>
 var defined_cd={};var charts={};
-var chartDescs={"reports":"RAW REPORTS (date_received): Shows what FDA actually received each month. Spikes may be batch dumps from recalls, NOT real surges. Use Smoothed view for true signal.","smoothed":"SMOOTHED REPORTS (event-date adjusted): Redistributes batch-dump excess across actual event months. THIS is the signal used for all analytics (Z-score, R-score, correlation, backtest). Green=smoothed, gray outline=raw for comparison.","rate_m":"RATE PER $M REVENUE (smoothed): Smoothed reports / monthly revenue. RISING rate = quality deteriorating faster than revenue growth.","rate_10k":"RATE PER 10K USERS (smoothed): Smoothed reports / installed base. Most precise normalization.","severity":"SEVERITY: Deaths (red), injuries (orange), malfunctions (yellow). Raw counts, not smoothed.","z":"Z-SCORE (on smoothed): Monthly z-scores computed on smoothed data. Much cleaner signal without batch noise. Z>2=anomalous.","stock":"STOCK OVERLAY: Green=price, Red=smoothed MAUDE. Look for smoothed MAUDE spikes preceding stock declines."};
+var chartDescs={"reports":"RAW REPORTS (date_received): Shows what FDA actually received each month, including batch dumps. Spikes may be recall paperwork, NOT real quality surges. Orange = batch months. Use Smoothed view for true signal.","smoothed":"SMOOTHED REPORTS (event-date adjusted): Redistributes batch-dump excess across actual event months. THIS is the signal used for all analytics (Z-score, R-score, correlation, backtest). Green bars = smoothed, dashed gray line = raw for comparison.","rate_m":"RATE PER $M REVENUE (smoothed): Smoothed reports divided by monthly revenue (quarterly/3). Normalizes for business growth. RISING rate = quality deteriorating faster than revenue growing. This metric predicted the PODD selloff 4-5 months early.","rate_10k":"RATE PER 10K USERS (smoothed): Smoothed reports divided by estimated installed base (per 10K users). The most precise normalization. New products with few users show HIGH rates even with few reports.","severity":"SEVERITY BREAKDOWN: Deaths (red), injuries (orange), malfunctions (yellow). Deaths weighted 10x in R-score. Raw counts, not smoothed. MAUDE-reported, not confirmed causal.","z":"Z-SCORE (on smoothed data): Monthly z-scores over time computed on smoothed series. Crossing +2 = anomalous. Sustained elevation = systemic issue. Much cleaner signal without batch noise.","stock":"STOCK OVERLAY: Green line = stock price. Red bars = smoothed MAUDE count. Look for: MAUDE spikes (red UP) preceding stock declines (green DOWN) by 1-4 months. That lead time is your alpha window."};
 function showTab(id){document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active")});document.querySelectorAll(".tabcontent").forEach(function(t){t.classList.remove("active")});var ct=document.querySelector('.tab[onclick*="'+id+'"]');if(ct)ct.classList.add("active");var tc=document.getElementById("tc-"+id);if(tc)tc.classList.add("active");}
 function toggleAcc(id){var el=document.getElementById(id);var arr=document.getElementById("arr-"+id);if(el.style.display==="none"){el.style.display="block";if(arr)arr.classList.add("open");}else{el.style.display="none";if(arr)arr.classList.remove("open");}}
-function af(){var fc=document.getElementById("fc").value;var fs=document.getElementById("fs").value;var fv=document.getElementById("fv").value;var sigs={"all":[],"CRITICAL":["CRITICAL"],"ELEVATED":["CRITICAL","ELEVATED"],"WATCH":["CRITICAL","ELEVATED","WATCH"]};var al=sigs[fs]||[];document.querySelectorAll(".card").forEach(function(c){var co=c.getAttribute("data-company");var si=c.getAttribute("data-signal");var vi=c.getAttribute("data-view");var sh=true;if(fc!=="all"&&co!==fc)sh=false;if(fs!=="all"&&al.indexOf(si)<0)sh=false;if(fv!=="all"&&vi!==fv)sh=false;c.style.display=sh?"":"none";});}
-function init(){for(var d in defined_cd){if(defined_cd.hasOwnProperty(d)){mk(d,defined_cd[d],"reports");}}document.querySelectorAll(".cc").forEach(function(cc){cc.querySelectorAll(".cb").forEach(function(btn){btn.addEventListener("click",function(){var mycc=this.parentNode;var did=mycc.id.replace("cc-","");var v=this.getAttribute("data-v");if(v==="reset"){if(charts[did])charts[did].resetZoom();return;}mycc.querySelectorAll(".cb:not(.rst)").forEach(function(s){s.classList.remove("active")});this.classList.add("active");var de=document.getElementById("cdesc-"+did);if(de&&chartDescs[v])de.textContent=chartDescs[v];mk(did,defined_cd[did],v);});});});}
-function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();var ds=[],yL="",bm=D.bm||[],evts=D.evts||[];var evtMs=evts.map(function(e){return e.date;});
-if(v==="reports"){var bc=D.l.map(function(m){return bm.indexOf(m)>=0?"rgba(230,126,34,0.5)":evtMs.indexOf(m)>=0?"rgba(192,57,43,0.5)":"rgba(39,174,96,0.4)";});ds=[{type:"bar",label:"Raw Reports",data:D.v,backgroundColor:bc,borderWidth:0,order:2},{type:"line",label:"6mo MA",data:D.ma6,borderColor:"#1a6b3a",borderWidth:2,pointRadius:0,fill:false,order:1}];yL="Reports (Raw)";}
-else if(v==="smoothed"){ds=[{type:"bar",label:"Smoothed",data:D.sm,backgroundColor:"rgba(39,174,96,0.5)",borderWidth:0,order:3},{type:"line",label:"Raw (ref)",data:D.v,borderColor:"rgba(0,0,0,0.15)",borderWidth:1,pointRadius:0,fill:false,borderDash:[4,4],order:1},{type:"line",label:"Smoothed MA",data:(function(){var r=[];for(var i=0;i<D.sm.length;i++){var s=0,c=0;for(var j=Math.max(0,i-5);j<=i;j++){s+=D.sm[j];c++;}r.push(Math.round(s/c));}return r;})(),borderColor:"#1a6b3a",borderWidth:2,pointRadius:0,fill:false,order:2}];yL="Reports (Smoothed)";}
+function af(){var fc=document.getElementById("fc").value;var fs=document.getElementById("fs").value;var fv=document.getElementById("fv").value;var sigs={"all":[],"CRITICAL":["CRITICAL"],"ELEVATED":["CRITICAL","ELEVATED"],"WATCH":["CRITICAL","ELEVATED","WATCH"]};var allowed=sigs[fs]||[];document.querySelectorAll(".card").forEach(function(c){var comp=c.getAttribute("data-company");var sig=c.getAttribute("data-signal");var view=c.getAttribute("data-view");var show=true;if(fc!=="all"&&comp!==fc)show=false;if(fs!=="all"&&allowed.indexOf(sig)<0)show=false;if(fv!=="all"&&view!==fv)show=false;c.style.display=show?"":"none";});}
+function init(){for(var d in defined_cd){if(defined_cd.hasOwnProperty(d)){mk(d,defined_cd[d],"reports");}}document.querySelectorAll(".cc").forEach(function(cc){cc.querySelectorAll(".cb").forEach(function(btn){btn.addEventListener("click",function(){var mycc=this.parentNode;var did=mycc.id.replace("cc-","");var v=this.getAttribute("data-v");if(v==="reset"){if(charts[did])charts[did].resetZoom();return;}mycc.querySelectorAll(".cb:not(.rst)").forEach(function(s){s.classList.remove("active")});this.classList.add("active");var descEl=document.getElementById("cdesc-"+did);if(descEl&&chartDescs[v]){descEl.textContent=chartDescs[v];}mk(did,defined_cd[did],v);});});});}
+function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();var ds=[],yL="",bm=D.bm||[],evts=D.evts||[];var evtMs=evts.map(function(e){return e.date;});var ann={};
+if(v==="reports"){var bc=D.l.map(function(m,i){return bm.indexOf(m)>=0?"rgba(230,126,34,0.5)":evtMs.indexOf(m)>=0?"rgba(192,57,43,0.5)":"rgba(39,174,96,0.4)";});ds=[{type:"bar",label:"Reports",data:D.v,backgroundColor:bc,borderWidth:0,order:2},{type:"line",label:"6mo MA",data:D.ma6,borderColor:"#1a6b3a",borderWidth:2,pointRadius:0,fill:false,order:1}];yL="Reports (Raw)";ann["s1"]={type:"box",yMin:D.s1l,yMax:D.s1h,backgroundColor:"rgba(39,174,96,0.08)",borderWidth:0};ann["s2"]={type:"box",yMin:D.s2l,yMax:D.s2h,backgroundColor:"rgba(39,174,96,0.04)",borderWidth:0};}
+else if(v==="smoothed"){var sma=[];for(var i=0;i<D.sm.length;i++){var s=0,c=0;for(var j=Math.max(0,i-5);j<=i;j++){s+=D.sm[j];c++;}sma.push(Math.round(s/c));}ds=[{type:"bar",label:"Smoothed",data:D.sm,backgroundColor:"rgba(39,174,96,0.5)",borderWidth:0,order:3},{type:"line",label:"Raw (reference)",data:D.v,borderColor:"rgba(0,0,0,0.15)",borderWidth:1,pointRadius:0,fill:false,borderDash:[4,4],order:1},{type:"line",label:"Smoothed MA",data:sma,borderColor:"#1a6b3a",borderWidth:2,pointRadius:0,fill:false,order:2}];yL="Reports (Smoothed)";}
 else if(v==="rate_m"){ds=[{type:"bar",label:"Rate/$M",data:D.rm,backgroundColor:"rgba(52,152,219,0.5)",borderWidth:0}];yL="Reports/$M";}
 else if(v==="rate_10k"){ds=[{type:"bar",label:"Rate/10K",data:D.r10k,backgroundColor:"rgba(155,89,182,0.5)",borderWidth:0}];yL="Reports/10K";}
 else if(v==="severity"){ds=[{type:"bar",label:"Deaths",data:D.deaths,backgroundColor:"rgba(192,57,43,0.7)",borderWidth:0},{type:"bar",label:"Injuries",data:D.injuries,backgroundColor:"rgba(230,126,34,0.6)",borderWidth:0},{type:"bar",label:"Malfunctions",data:D.malfs,backgroundColor:"rgba(241,196,15,0.5)",borderWidth:0}];yL="Count";}
-else if(v==="z"){ds=[{type:"line",label:"Z-Score (smoothed)",data:D.z,borderColor:"#2980b9",borderWidth:2,pointRadius:1,fill:false}];yL="Z-Score";}
-else if(v==="stock"){ds=[{type:"line",label:"Stock $",data:D.stk,borderColor:"rgba(39,174,96,0.8)",borderWidth:2,pointRadius:0,fill:false,yAxisID:"y"},{type:"bar",label:"MAUDE (sm)",data:D.sm,backgroundColor:"rgba(192,57,43,0.3)",borderWidth:0,yAxisID:"y2"}];yL="Stock $";}
+else if(v==="z"){ds=[{type:"line",label:"Z-Score",data:D.z,borderColor:"#2980b9",borderWidth:2,pointRadius:1,fill:false}];yL="Z-Score";ann["z2"]={type:"line",yMin:2,yMax:2,borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[4,4]};ann["z0"]={type:"line",yMin:0,yMax:0,borderColor:"rgba(0,0,0,0.2)",borderWidth:1};}
+else if(v==="stock"){var sv=D.stk||[];ds=[{type:"line",label:"Stock $",data:sv,borderColor:"rgba(39,174,96,0.8)",borderWidth:2,pointRadius:0,fill:false,yAxisID:"y"},{type:"bar",label:"MAUDE (Smoothed)",data:D.sm,backgroundColor:"rgba(192,57,43,0.3)",borderWidth:0,yAxisID:"y2"}];yL="Stock Price ($)";}
 var opts={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:ds.length>1,position:"top",labels:{font:{size:10}}},zoom:{zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:"x"},pan:{enabled:true,mode:"x"}}},scales:{x:{ticks:{font:{size:9},maxRotation:45}},y:{title:{display:true,text:yL,font:{size:10}},ticks:{font:{size:9}}}}};
-if(v==="stock"){opts.scales["y2"]={position:"right",title:{display:true,text:"MAUDE (Smoothed)"},grid:{display:false},ticks:{font:{size:9}}};}
+if(v==="stock"){opts.scales["y2"]={position:"right",title:{display:true,text:"MAUDE Reports (Smoothed)",font:{size:10}},grid:{display:false},ticks:{font:{size:9}}};}
+if(Object.keys(ann).length>0){opts.plugins.annotation={annotations:ann};}
 charts[did]=new Chart(ctx,{data:{labels:D.l,datasets:ds},options:opts});}
 document.addEventListener("DOMContentLoaded",init);
 </script></body></html>
