@@ -2,14 +2,23 @@
 """MAUDE Monitor V3.3 — Event-Date Smoothing, Multi-Signal Correlation, PM Case Studies.
 Core fix: uses date_of_event as true signal, date_received for batch detection.
 Smoothed series redistributes batch spikes across actual event months.
-All modules inline. No external deps beyond stdlib + yfinance (optional)."""
+All modules inline. No external deps beyond stdlib + yfinance (optional).
+REQUIRES: openFDA API key (free) as env var OPENFDA_API_KEY for reliable operation."""
 import json,os,time,math,argparse,smtplib,csv,re
 from datetime import datetime,timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from urllib.request import urlopen,Request
-from urllib.parse import quote as url_quote
+from urllib.parse import quote as _orig_url_quote
 from urllib.error import HTTPError,URLError
+
+# Fix: preserve + signs in URL (openFDA uses + as space in search syntax)
+def url_quote(s, *args, **kwargs):
+    kwargs.setdefault('safe', '+')
+    return _orig_url_quote(s, *args, **kwargs)
+
+# openFDA API key (free from https://open.fda.gov/apis/authentication/)
+OPENFDA_API_KEY = os.environ.get("OPENFDA_API_KEY", "")
 
 HAS_MODULES = True
 
@@ -174,16 +183,49 @@ def get_revenue_staleness():
     except: return {"stale":True,"days":999,"message":"Unknown"}
 
 # ============================================================
-# OPENFDA DATA FETCHING
+# OPENFDA DATA FETCHING — WITH API KEY + REAL ERROR LOGGING
 # ============================================================
 def _api_get(url, retries=3):
+    """Fetch JSON from openFDA API with retries, API key, and real error logging."""
+    # Append API key if available
+    if OPENFDA_API_KEY:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}api_key={OPENFDA_API_KEY}"
+
     for attempt in range(retries):
         try:
             req = Request(url, headers={"User-Agent":"MAUDE-Monitor/3.3"})
-            with urlopen(req, timeout=30) as resp: return json.loads(resp.read().decode())
-        except: 
-            if attempt < retries-1: time.sleep(2*(attempt+1))
-            else: return None
+            with urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode()
+                data = json.loads(raw)
+                # Check for API error response
+                if "error" in data:
+                    err = data["error"]
+                    print(f"      API ERROR: {err.get('code','?')} - {err.get('message','')[:80]}")
+                    if err.get("code") == "TOO_MANY_REQUESTS":
+                        time.sleep(10 * (attempt + 1))
+                        continue
+                    return None
+                return data
+        except HTTPError as e:
+            body = ""
+            try: body = e.read().decode()[:200]
+            except: pass
+            print(f"      HTTP {e.code} on attempt {attempt+1}: {body[:100]}")
+            if e.code == 429:
+                time.sleep(10 * (attempt + 1))
+            elif e.code == 404:
+                return None
+            else:
+                time.sleep(3 * (attempt + 1))
+        except URLError as e:
+            print(f"      URL ERROR on attempt {attempt+1}: {str(e)[:100]}")
+            time.sleep(3 * (attempt + 1))
+        except Exception as e:
+            print(f"      ERROR on attempt {attempt+1}: {type(e).__name__}: {str(e)[:100]}")
+            time.sleep(3 * (attempt + 1))
+    print(f"      FAILED after {retries} attempts")
+    return None
 
 def fetch_counts(search_query, date_field, start_date):
     url = (f"https://api.fda.gov/device/event.json?"
@@ -210,51 +252,25 @@ def fetch_severity(search_query, start_date):
             for r in data["results"]:
                 d = r.get("time","")
                 if len(d)>=6: m=f"{d[:4]}-{d[4:6]}"; sev[etype][m] = sev[etype].get(m,0)+r.get("count",0)
-        time.sleep(0.3)
+        time.sleep(0.5)
     return sev
 
 # ============================================================
-# EVENT-DATE SMOOTHING ENGINE (THE CORE FIX)
+# EVENT-DATE SMOOTHING ENGINE
 # ============================================================
 def compute_smoothed_series(recv_counts, event_counts):
-    """
-    The KEY insight: date_received spikes when manufacturers batch-dump
-    late reports (especially after recalls). date_of_event shows when
-    problems ACTUALLY occurred.
-    
-    Algorithm:
-    1. For each month, compute excess = received - event counts
-    2. If excess > 0 and significant, that month has batch reporting
-    3. The smoothed series uses event_date counts as the base
-    4. Remaining unmatched received reports are distributed across
-       the prior N months proportionally
-    5. Result: a "true signal" that strips batch dumps
-    
-    Returns: {month: smoothed_count} dict
-    """
     all_months = sorted(set(list(recv_counts.keys()) + list(event_counts.keys())))
     if not all_months: return {}
-    
-    # Start with event-date counts as the base truth
     smoothed = {m: event_counts.get(m, 0) for m in all_months}
-    
-    # Calculate total received vs total event to find unmatched reports
     total_recv = sum(recv_counts.get(m, 0) for m in all_months)
     total_evnt = sum(event_counts.get(m, 0) for m in all_months)
-    
-    # If event counts are very close to received, no smoothing needed
     if total_recv <= 0 or total_evnt <= 0:
         return recv_counts.copy()
-    
-    # For each month, identify batch excess
     for m in all_months:
         rc = recv_counts.get(m, 0)
         ec = event_counts.get(m, 0)
         excess = rc - ec
-        
         if excess > ec * 0.5 and excess > 50:
-            # This month has significant batch reporting
-            # Distribute excess across prior 6 months proportionally
             idx = all_months.index(m)
             lookback = min(6, idx)
             if lookback > 0:
@@ -265,21 +281,16 @@ def compute_smoothed_series(recv_counts, event_counts):
                         weight = smoothed.get(pm, 0) / prior_total
                         smoothed[pm] = smoothed.get(pm, 0) + int(excess * weight)
                 else:
-                    # Equal distribution if no prior data
                     per_month = excess // lookback
                     for pm in prior_months:
                         smoothed[pm] = smoothed.get(pm, 0) + per_month
-    
-    # Scale smoothed to match total received (preserves total volume)
     sm_total = sum(smoothed.values())
     if sm_total > 0 and total_recv > 0:
         scale = total_recv / sm_total
         smoothed = {m: max(0, int(v * scale)) for m, v in smoothed.items()}
-    
     return smoothed
 
 def detect_batch(recv_counts, event_counts, ticker=None):
-    """Enhanced batch detection using recv vs event date comparison."""
     batch = {}
     for m in recv_counts:
         rc = recv_counts.get(m, 0); ec = event_counts.get(m, 0)
@@ -292,10 +303,9 @@ def detect_batch(recv_counts, event_counts, ticker=None):
     return batch
 
 # ============================================================
-# STATISTICS & SCORING (now accepts smoothed series)
+# STATISTICS & SCORING
 # ============================================================
 def compute_stats(recv_counts, sev_data, ticker, smoothed=None):
-    """Compute stats using SMOOTHED counts if available, raw otherwise."""
     counts = smoothed if smoothed else recv_counts
     if not counts: return None
     months = sorted(counts.keys()); vals = [counts[m] for m in months]; n = len(vals)
@@ -327,7 +337,6 @@ def compute_stats(recv_counts, sev_data, ticker, smoothed=None):
     ma6 = {}
     for i,m in enumerate(months):
         window = vals[max(0,i-5):i+1]; ma6[m] = sum(window)/len(window)
-    # Also store raw values for comparison
     raw_vals = [recv_counts.get(m,0) for m in months] if smoothed else vals
     return {"months":months,"values":vals,"raw_values":raw_vals,
             "mean":mean_val,"std":std_val,"z_score":z_score,
@@ -367,38 +376,28 @@ def compute_r_score(stats):
     return min(100,s)
 
 # ============================================================
-# MODULE 1: MULTI-SIGNAL CORRELATION
+# ALL MODULES (identical to what you have — not changing these)
 # ============================================================
-def compute_enhanced_correlation(counts, stock_prices, max_lag=6,
-                                 revenue_dict=None, installed_base_dict=None):
+def compute_enhanced_correlation(counts, stock_prices, max_lag=6, revenue_dict=None, installed_base_dict=None):
     try:
         if not counts or not stock_prices:
-            return {"status":"insufficient_data","message":"Missing data.",
-                    "best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,
-                    "direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
+            return {"status":"insufficient_data","message":"Missing data.","best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,"direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
         common = sorted(set(counts.keys()) & set(stock_prices.keys()))
         if len(common)<14:
-            return {"status":"insufficient_data","message":f"{len(common)} months, need 14+.",
-                    "best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,
-                    "direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
-        mc = [counts[m] for m in common]
-        sp = [stock_prices[m] for m in common]
+            return {"status":"insufficient_data","message":f"{len(common)} months, need 14+.","best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,"direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
+        mc = [counts[m] for m in common]; sp = [stock_prices[m] for m in common]
         sr = [0.0]+[(sp[i]-sp[i-1])/sp[i-1]*100 if sp[i-1]>0 else 0.0 for i in range(1,len(sp))]
         signals = {"raw_counts":mc}
         signals["count_delta"] = [0.0]+[mc[i]-mc[i-1] for i in range(1,len(mc))]
         zs = []
         for i in range(len(mc)):
             w = mc[max(0,i-5):i+1]
-            if len(w)>=3:
-                mu=sum(w)/len(w); sd=math.sqrt(sum((v-mu)**2 for v in w)/len(w))
-                zs.append((mc[i]-mu)/sd if sd>0 else 0.0)
+            if len(w)>=3: mu=sum(w)/len(w); sd=math.sqrt(sum((v-mu)**2 for v in w)/len(w)); zs.append((mc[i]-mu)/sd if sd>0 else 0.0)
             else: zs.append(0.0)
         signals["z_score"] = zs
         if revenue_dict:
             rr = []
-            for m in common:
-                yr,mo=m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"; qr=revenue_dict.get(q)
-                rr.append(counts[m]/(qr/3)*1e6 if qr and qr>0 else None)
+            for m in common: yr,mo=m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"; qr=revenue_dict.get(q); rr.append(counts[m]/(qr/3)*1e6 if qr and qr>0 else None)
             lv=None
             for i in range(len(rr)):
                 if rr[i] is not None: lv=rr[i]
@@ -407,74 +406,45 @@ def compute_enhanced_correlation(counts, stock_prices, max_lag=6,
             signals["rate_per_rev"] = rr
         if installed_base_dict:
             rb = []
-            for m in common:
-                yr,mo=m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"; ib=installed_base_dict.get(q)
-                rb.append(counts[m]/ib*10000 if ib and ib>0 else None)
+            for m in common: yr,mo=m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"; ib=installed_base_dict.get(q); rb.append(counts[m]/ib*10000 if ib and ib>0 else None)
             lv=None
             for i in range(len(rb)):
                 if rb[i] is not None: lv=rb[i]
                 elif lv is not None: rb[i]=lv
                 else: rb[i]=0.0
             signals["rate_per_base"] = rb
-        dl = signals["count_delta"]
-        signals["acceleration"] = [0.0,0.0]+[dl[i]-dl[i-1] for i in range(2,len(dl))]
-        ob_rho,ob_p,ob_lag,ob_sig = 0,1.0,0,"raw_counts"
-        sa = {}; llr = {}
+        dl = signals["count_delta"]; signals["acceleration"] = [0.0,0.0]+[dl[i]-dl[i-1] for i in range(2,len(dl))]
+        ob_rho,ob_p,ob_lag,ob_sig = 0,1.0,0,"raw_counts"; sa = {}; llr = {}
         for sn,sv in signals.items():
             br,bp,bl = 0,1.0,0; ld = {}
             for lag in range(0, min(max_lag+1, len(sv)-6)):
-                ss = sv[:len(sv)-lag] if lag>0 else sv
-                rs = sr[lag:] if lag>0 else sr
-                ml = min(len(ss),len(rs))
+                ss = sv[:len(sv)-lag] if lag>0 else sv; rs = sr[lag:] if lag>0 else sr; ml = min(len(ss),len(rs))
                 if ml<8: continue
                 a,b = ss[:ml],rs[:ml]
                 if all(v==a[0] for v in a) or all(v==b[0] for v in b): continue
-                rho,p = _proper_spearman(a,b)
-                ld[f"{lag}mo"] = {"rho":rho,"p":p}
+                rho,p = _proper_spearman(a,b); ld[f"{lag}mo"] = {"rho":rho,"p":p}
                 if sn=="raw_counts": llr[f"{lag}mo"]={"rho":rho,"p":p}
                 if abs(rho)>abs(br): br,bp,bl = rho,p,lag
-            sa[sn] = {"best_rho":br,"best_p":bp,"best_lag":bl,
-                      "significant":bp<0.05,"direction":"negative" if br<0 else "positive","lag_detail":ld}
+            sa[sn] = {"best_rho":br,"best_p":bp,"best_lag":bl,"significant":bp<0.05,"direction":"negative" if br<0 else "positive","lag_detail":ld}
             if abs(br)>abs(ob_rho): ob_rho,ob_p,ob_lag,ob_sig = br,bp,bl,sn
-        sc = sum(1 for s in sa.values() if s["significant"])
-        nc = sum(1 for s in sa.values() if s["significant"] and s["direction"]=="negative")
-        aar = sum(abs(s["best_rho"]) for s in sa.values())/max(len(sa),1)
-        con = nc/max(sc,1)
-        conf = min(100,int(abs(ob_rho)*40+aar*20+sc/len(sa)*20+con*20))
-        osig = ob_p<0.05
+        sc = sum(1 for s in sa.values() if s["significant"]); nc = sum(1 for s in sa.values() if s["significant"] and s["direction"]=="negative")
+        aar = sum(abs(s["best_rho"]) for s in sa.values())/max(len(sa),1); con = nc/max(sc,1)
+        conf = min(100,int(abs(ob_rho)*40+aar*20+sc/len(sa)*20+con*20)); osig = ob_p<0.05
         msg = f"Best: \u03C1={ob_rho:+.3f} at {ob_lag}mo lag (p={ob_p:.4f}, signal={ob_sig}). "
         if osig and ob_rho<-0.2: msg+=f"MAUDE {ob_sig} predicts declines {ob_lag}mo ahead. "
         elif osig and ob_rho>0.2: msg+="Market pricing in concurrently. "
         else: msg+="No significant lead-lag. "
         msg+=f"Confidence: {conf}/100 ({sc}/{len(sa)} sig, {nc} neg)."
-        return {"status":"ok","best_rho":ob_rho,"best_p":ob_p,"best_lag":ob_lag,
-                "significant":osig,"direction":"negative" if ob_rho<0 else "positive",
-                "lag_results":llr,"message":msg,"best_signal":ob_sig,"confidence":conf,
-                "signal_analysis":sa,"signals_tested":len(sa),"signals_significant":sc,"signals_negative":nc}
+        return {"status":"ok","best_rho":ob_rho,"best_p":ob_p,"best_lag":ob_lag,"significant":osig,"direction":"negative" if ob_rho<0 else "positive","lag_results":llr,"message":msg,"best_signal":ob_sig,"confidence":conf,"signal_analysis":sa,"signals_tested":len(sa),"signals_significant":sc,"signals_negative":nc}
     except Exception as e:
-        return {"status":"error","message":str(e)[:200],"best_rho":0,"best_p":1.0,"best_lag":0,
-                "significant":False,"direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
+        return {"status":"error","message":str(e)[:200],"best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,"direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
 
-# ============================================================
-# MODULES 2-9: Failure Modes, EDGAR, Insider, Trials, Recalls, etc.
-# ============================================================
 def analyze_failure_modes(sq, start, limit=50):
     url = f"https://api.fda.gov/device/event.json?search=brand_name:{url_quote(sq)}+AND+date_received:[{start}+TO+now]&limit={limit}"
     data = _api_get(url)
     if not data or "results" not in data: return {"status":"no_data","categories":{},"total":0}
-    cats = {"sensor_failure":0,"adhesion":0,"connectivity":0,"inaccurate_reading":0,"skin_reaction":0,
-            "alarm_alert":0,"battery":0,"physical_damage":0,"software":0,"insertion":0,"occlusion":0,"other":0}
-    kw = {"sensor_failure":["sensor fail","no reading","sensor error","lost signal","signal loss","expired early"],
-          "adhesion":["fell off","adhesive","peel","detach","came off","not stick"],
-          "connectivity":["bluetooth","connect","pair","sync","lost connection","disconnect"],
-          "inaccurate_reading":["inaccurate","wrong reading","false","discrepan","not match","off by"],
-          "skin_reaction":["rash","irritat","red","itch","allerg","skin","welt","blister"],
-          "alarm_alert":["alarm","alert","no sound","speaker","beep","notification","did not alert"],
-          "battery":["battery","charge","power","dead","drain","won't turn on"],
-          "physical_damage":["crack","broke","snap","bent","leak","damage"],
-          "software":["software","app","crash","freeze","update","glitch","display"],
-          "insertion":["insert","needle","pain","bleed","bruis","applicat"],
-          "occlusion":["occlus","block","clog","no deliv","no insulin"]}
+    cats = {"sensor_failure":0,"adhesion":0,"connectivity":0,"inaccurate_reading":0,"skin_reaction":0,"alarm_alert":0,"battery":0,"physical_damage":0,"software":0,"insertion":0,"occlusion":0,"other":0}
+    kw = {"sensor_failure":["sensor fail","no reading","sensor error","lost signal","signal loss","expired early"],"adhesion":["fell off","adhesive","peel","detach","came off","not stick"],"connectivity":["bluetooth","connect","pair","sync","lost connection","disconnect"],"inaccurate_reading":["inaccurate","wrong reading","false","discrepan","not match","off by"],"skin_reaction":["rash","irritat","red","itch","allerg","skin","welt","blister"],"alarm_alert":["alarm","alert","no sound","speaker","beep","notification","did not alert"],"battery":["battery","charge","power","dead","drain","won't turn on"],"physical_damage":["crack","broke","snap","bent","leak","damage"],"software":["software","app","crash","freeze","update","glitch","display"],"insertion":["insert","needle","pain","bleed","bruis","applicat"],"occlusion":["occlus","block","clog","no deliv","no insulin"]}
     total = 0
     for r in data["results"]:
         for tf in ["mdr_text"]:
@@ -488,8 +458,7 @@ def analyze_failure_modes(sq, start, limit=50):
                         if any(k in nar for k in kws): cats[cat]+=1; matched=True; break
                     if not matched: cats["other"]+=1
     top = sorted(cats.items(), key=lambda x:-x[1])[:5]
-    return {"status":"ok","categories":cats,"total":total,
-            "top_modes":[{"mode":k,"count":v,"pct":round(v/max(total,1)*100,1)} for k,v in top]}
+    return {"status":"ok","categories":cats,"total":total,"top_modes":[{"mode":k,"count":v,"pct":round(v/max(total,1)*100,1)} for k,v in top]}
 
 def analyze_edgar_filings(tk):
     if tk in ("SQEL","BBNX"): return {"status":"skip","message":"Limited EDGAR history"}
@@ -500,14 +469,11 @@ def analyze_edgar_filings(tk):
         url=f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
         req=Request(url,headers={"User-Agent":"MAUDE-Monitor/3.3 research@example.com"})
         with urlopen(req,timeout=15) as resp: filings=json.loads(resp.read().decode())
-        recent=filings.get("filings",{}).get("recent",{})
-        forms=recent.get("form",[]); dates=recent.get("filingDate",[])
-        cutoff=(datetime.now()-timedelta(days=90)).strftime("%Y-%m-%d")
-        last90=[(f,d) for f,d in zip(forms,dates) if d>=cutoff]
+        recent=filings.get("filings",{}).get("recent",{}); forms=recent.get("form",[]); dates=recent.get("filingDate",[])
+        cutoff=(datetime.now()-timedelta(days=90)).strftime("%Y-%m-%d"); last90=[(f,d) for f,d in zip(forms,dates) if d>=cutoff]
         fc={}
         for f,d in last90: fc[f]=fc.get(f,0)+1
-        return {"status":"ok","total_90d":len(last90),"form_counts":fc,
-                "eight_k_count":fc.get("8-K",0),"message":f"{len(last90)} filings 90d ({fc.get('8-K',0)} 8-Ks)"}
+        return {"status":"ok","total_90d":len(last90),"form_counts":fc,"eight_k_count":fc.get("8-K",0),"message":f"{len(last90)} filings 90d ({fc.get('8-K',0)} 8-Ks)"}
     except Exception as e: return {"status":"error","message":str(e)[:100]}
 
 def analyze_insider_trading_detailed(tk):
@@ -519,8 +485,7 @@ def analyze_insider_trading_detailed(tk):
         url=f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
         req=Request(url,headers={"User-Agent":"MAUDE-Monitor/3.3 research@example.com"})
         with urlopen(req,timeout=15) as resp: filings=json.loads(resp.read().decode())
-        recent=filings.get("filings",{}).get("recent",{})
-        forms=recent.get("form",[]); dates=recent.get("filingDate",[])
+        recent=filings.get("filings",{}).get("recent",{}); forms=recent.get("form",[]); dates=recent.get("filingDate",[])
         cutoff=(datetime.now()-timedelta(days=90)).strftime("%Y-%m-%d")
         f4=sum(1 for f,d in zip(forms,dates) if f in ("4","4/A") and d>=cutoff)
         return {"status":"ok","form4_count_90d":f4,"message":f"{f4} Form 4s in 90d"}
@@ -533,8 +498,7 @@ def analyze_clinical_trials(tk):
         url=f"https://clinicaltrials.gov/api/v2/studies?query.spons={url_quote(sp)}&filter.overallStatus=RECRUITING,NOT_YET_RECRUITING,ACTIVE_NOT_RECRUITING&pageSize=20"
         req=Request(url,headers={"User-Agent":"MAUDE-Monitor/3.3"})
         with urlopen(req,timeout=15) as resp: data=json.loads(resp.read().decode())
-        studies=data.get("studies",[])
-        return {"status":"ok","count":len(studies),"message":f"{len(studies)} active trials"}
+        return {"status":"ok","count":len(data.get("studies",[])),"message":f"{len(data.get('studies',[]))} active trials"}
     except Exception as e: return {"status":"error","message":str(e)[:100]}
 
 def analyze_fda_recalls(sq, tk):
@@ -542,11 +506,9 @@ def analyze_fda_recalls(sq, tk):
         url=f"https://api.fda.gov/device/recall.json?search=product_description:{url_quote(sq)}&sort=event_date_terminated:desc&limit=10"
         data=_api_get(url)
         if not data or "results" not in data: return {"status":"ok","count":0,"recalls":[],"message":"No recalls"}
-        recalls=[{"reason":r.get("reason_for_recall","")[:120],"classification":r.get("classification",""),
-                  "status":r.get("status",""),"date":r.get("event_date_terminated","")[:10]} for r in data["results"][:5]]
+        recalls=[{"reason":r.get("reason_for_recall","")[:120],"classification":r.get("classification",""),"status":r.get("status",""),"date":r.get("event_date_terminated","")[:10]} for r in data["results"][:5]]
         c1=sum(1 for r in recalls if r["classification"]=="Class I")
-        return {"status":"ok","count":len(data["results"]),"recalls":recalls,"class1_count":c1,
-                "message":f'{len(data["results"])} recalls ({c1} Class I)'}
+        return {"status":"ok","count":len(data["results"]),"recalls":recalls,"class1_count":c1,"message":f'{len(data["results"])} recalls ({c1} Class I)'}
     except Exception as e: return {"status":"error","message":str(e)[:100]}
 
 def compute_recall_probability(stats, fm, edgar, tk):
@@ -563,10 +525,8 @@ def compute_recall_probability(stats, fm, edgar, tk):
         cats=fm.get("categories",{})
         if cats.get("alarm_alert",0)>5: s+=15
         if cats.get("sensor_failure",0)>10: s+=10
-    s=min(100,s)
-    lev = "HIGH" if s>=70 else "MODERATE" if s>=40 else "LOW"
-    return {"status":"ok","probability":s,"level":lev,
-            "message":f"Recall prob: {lev} ({s}/100). Heuristic model."}
+    s=min(100,s); lev = "HIGH" if s>=70 else "MODERATE" if s>=40 else "LOW"
+    return {"status":"ok","probability":s,"level":lev,"message":f"Recall prob: {lev} ({s}/100). Heuristic model."}
 
 def compute_peer_relative(r_scores):
     if not r_scores: return {}
@@ -588,43 +548,31 @@ def compute_earnings_predictor(stats,corr,insider,trials,fm,tk):
     elif stats["z_score"]<=-1: s+=10; factors.append(("MAUDE below avg",+10))
     if stats["slope_6mo"]>30: s-=10; factors.append(("Rising MAUDE trend",-10))
     elif stats["slope_6mo"]<-10: s+=5; factors.append(("Declining trend",+5))
-    if corr and corr.get("significant") and corr.get("direction")=="negative":
-        s-=10; factors.append(("Neg MAUDE-stock corr",-10))
+    if corr and corr.get("significant") and corr.get("direction")=="negative": s-=10; factors.append(("Neg MAUDE-stock corr",-10))
     if stats["deaths_3mo"]>=2: s-=10; factors.append(("Recent deaths",-10))
     if stats["injuries_3mo"]>=20: s-=5; factors.append(("Elevated injuries",-5))
     if fm and fm.get("status")=="ok":
         if fm.get("categories",{}).get("alarm_alert",0)>5: s-=5; factors.append(("Alarm issues",-5))
-    s=max(0,min(100,s))
-    out="POSITIVE" if s>=65 else "NEUTRAL" if s>=40 else "NEGATIVE"
-    return {"status":"ok","score":s,"outlook":out,"factors":factors,
-            "message":f"Outlook: {out} ({s}/100). Heuristic model."}
+    s=max(0,min(100,s)); out="POSITIVE" if s>=65 else "NEUTRAL" if s>=40 else "NEGATIVE"
+    return {"status":"ok","score":s,"outlook":out,"factors":factors,"message":f"Outlook: {out} ({s}/100). Heuristic model."}
 
-# ============================================================
-# MODULE 10: BACKTEST CASE STUDIES (PM-READY)
-# ============================================================
 def compute_backtest_case_studies(counts, stock_prices, stats, tk, batch_info=None):
     try:
-        if not counts or not stock_prices or not stats:
-            return {"status":"insufficient_data","signals":[],"case_studies":[],"summary":{}}
+        if not counts or not stock_prices or not stats: return {"status":"insufficient_data","signals":[],"case_studies":[],"summary":{}}
         sm = sorted(set(counts.keys()) & set(stock_prices.keys()))
         if len(sm)<12: return {"status":"insufficient_data","signals":[],"case_studies":[],"summary":{}}
         mc={m:counts[m] for m in sm}; sp={m:stock_prices[m] for m in sm}
         zbm={}
         for i,m in enumerate(sm):
             w=[mc[sm[j]] for j in range(max(0,i-5),i+1)]
-            if len(w)>=3:
-                mu=sum(w)/len(w); sd=math.sqrt(sum((v-mu)**2 for v in w)/len(w))
-                zbm[m]=(mc[m]-mu)/sd if sd>0 else 0.0
+            if len(w)>=3: mu=sum(w)/len(w); sd=math.sqrt(sum((v-mu)**2 for v in w)/len(w)); zbm[m]=(mc[m]-mu)/sd if sd>0 else 0.0
             else: zbm[m]=0.0
         rcm={}; prev=None
-        for m in sm:
-            rcm[m]=(mc[m]-mc[prev])/mc[prev]*100 if prev and mc.get(prev,0)>0 else 0.0
-            prev=m
+        for m in sm: rcm[m]=(mc[m]-mc[prev])/mc[prev]*100 if prev and mc.get(prev,0)>0 else 0.0; prev=m
         ZT,ST,CD=1.5,30.0,3; sigs=[]; cases=[]; lsi=-999
         for i,m in enumerate(sm):
             if i-lsi<CD or i<6: continue
-            z=zbm.get(m,0); rc=rcm.get(m,0)
-            ib=False
+            z=zbm.get(m,0); rc=rcm.get(m,0); ib=False
             if batch_info:
                 bi=batch_info.get(m)
                 if bi in ("batch","mild_batch"): ib=True
@@ -634,40 +582,25 @@ def compute_backtest_case_studies(counts, stock_prices, stats, tk, batch_info=No
             if not trig: continue
             lsi=i; ep=sp[m]; fwd={}
             for hn,hm in [("1mo",1),("2mo",2),("3mo",3),("6mo",6)]:
-                if i+hm<len(sm):
-                    xm=sm[i+hm]; xp=sp[xm]; ret=(xp-ep)/ep*100
-                    fwd[hn]={"exit_month":xm,"exit_price":round(xp,2),"long_ret":round(ret,2),
-                             "short_ret":round(-ret,2),"short_pnl":round(-(xp-ep)/ep*10000,2)}
+                if i+hm<len(sm): xm=sm[i+hm]; xp=sp[xm]; ret=(xp-ep)/ep*100; fwd[hn]={"exit_month":xm,"exit_price":round(xp,2),"long_ret":round(ret,2),"short_ret":round(-ret,2),"short_pnl":round(-(xp-ep)/ep*10000,2)}
             sigs.append({"month":m,"z":round(z,2),"mom":round(rc,1),"trigger":trig,"entry":round(ep,2),"fwd":fwd})
             bh=None; bsp=0
             for h,d in fwd.items():
                 if d["short_pnl"]>bsp: bsp=d["short_pnl"]; bh=h
-            cs={"month":m,"ticker":tk,"trigger":trig,"entry":round(ep,2),"reports":mc[m],"z":round(z,2),
-                "best_h":bh,"best_pnl":round(bsp,2) if bh else 0,"profitable":bsp>0 if bh else False,"fwd":fwd}
-            if bh and bsp>0:
-                ed=fwd[bh]
-                cs["narrative"]=f"{m}: {trig}. {tk} ${ep:.2f}\u2192${ed['exit_price']:.2f} ({bh}). Short P&L: +${bsp:,.0f}/$10K."
-            elif bh:
-                ed=fwd[bh]
-                cs["narrative"]=f"{m}: {trig}. {tk} ${ep:.2f}. Short MISSED. Loss: ${abs(bsp):,.0f}/$10K."
+            cs={"month":m,"ticker":tk,"trigger":trig,"entry":round(ep,2),"reports":mc[m],"z":round(z,2),"best_h":bh,"best_pnl":round(bsp,2) if bh else 0,"profitable":bsp>0 if bh else False,"fwd":fwd}
+            if bh and bsp>0: ed=fwd[bh]; cs["narrative"]=f"{m}: {trig}. {tk} ${ep:.2f}\u2192${ed['exit_price']:.2f} ({bh}). Short P&L: +${bsp:,.0f}/$10K."
+            elif bh: ed=fwd[bh]; cs["narrative"]=f"{m}: {trig}. {tk} ${ep:.2f}. Short MISSED. Loss: ${abs(bsp):,.0f}/$10K."
             else: cs["narrative"]=f"{m}: Signal, insufficient fwd data."
             cases.append(cs)
-        tot=len(sigs); prof=sum(1 for c in cases if c.get("profitable"))
-        tp=sum(c.get("best_pnl",0) for c in cases if c.get("best_h"))
-        hr=prof/tot*100 if tot>0 else 0; ap=tp/tot if tot>0 else 0
-        gr="STRONG" if hr>=60 else "MODERATE" if hr>=45 else "WEAK"
-        return {"status":"ok","signals":sigs,"case_studies":cases,
-                "summary":{"total":tot,"profitable":prof,"hit_rate":round(hr,1),"total_pnl":round(tp,2),
-                           "avg_pnl":round(ap,2),"grade":gr,
-                           "message":f"{gr}: {hr:.0f}% hit, {tot} signals, P&L: ${tp:+,.0f}/$10K"}}
-    except Exception as e:
-        return {"status":"error","message":str(e)[:200],"signals":[],"case_studies":[],"summary":{}}
+        tot=len(sigs); prof=sum(1 for c in cases if c.get("profitable")); tp=sum(c.get("best_pnl",0) for c in cases if c.get("best_h"))
+        hr=prof/tot*100 if tot>0 else 0; ap=tp/tot if tot>0 else 0; gr="STRONG" if hr>=60 else "MODERATE" if hr>=45 else "WEAK"
+        return {"status":"ok","signals":sigs,"case_studies":cases,"summary":{"total":tot,"profitable":prof,"hit_rate":round(hr,1),"total_pnl":round(tp,2),"avg_pnl":round(ap,2),"grade":gr,"message":f"{gr}: {hr:.0f}% hit, {tot} signals, P&L: ${tp:+,.0f}/$10K"}}
+    except Exception as e: return {"status":"error","message":str(e)[:200],"signals":[],"case_studies":[],"summary":{}}
 
 def analyze_google_trends(tk): return {"status":"framework","message":"Requires pytrends."}
 def analyze_short_interest(tk): return {"status":"framework","message":"Requires Yahoo scraping."}
 def analyze_payer_coverage(tk):
-    c={"DXCM":"Broad commercial+Medicare CGM","PODD":"Broad commercial+Medicare pump","TNDM":"Broad commercial+Medicare pump",
-       "ABT":"Broad commercial+Medicare CGM","MDT":"Broad commercial+Medicare pump","BBNX":"Limited (new)","SQEL":"Pre-market"}
+    c={"DXCM":"Broad commercial+Medicare CGM","PODD":"Broad commercial+Medicare pump","TNDM":"Broad commercial+Medicare pump","ABT":"Broad commercial+Medicare CGM","MDT":"Broad commercial+Medicare pump","BBNX":"Limited (new)","SQEL":"Pre-market"}
     return {"status":"ok","message":c.get(tk,"Unknown")}
 def analyze_international(tk): return {"status":"framework","message":"No structured API."}
 # ============================================================
