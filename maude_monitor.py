@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """MAUDE Monitor V3.2 — Complete self-contained single file for GitHub Actions.
-All 13 data modules + V3.2 smoothing + case studies built inline. No external dependencies beyond stdlib + yfinance."""
+All modules built inline. Enhanced correlation, recall-aware smoothing, PM case studies.
+No external dependencies beyond stdlib + yfinance (optional)."""
 import json,os,time,math,argparse,smtplib,csv,re
-from datetime import datetime
+from datetime import datetime,timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from urllib.request import urlopen,Request
 from urllib.parse import quote as url_quote
 from urllib.error import HTTPError,URLError
-import re as _re
 
-HAS_MODULES = True  # Everything is inline now
+HAS_MODULES = True
 
 def fmt(v,d=1):
     if v is None: return "\u2014"
@@ -25,6 +25,61 @@ def fmt2(v):
     return f"{v:,.2f}"
 
 # ============================================================
+# PROPER SPEARMAN WITH REAL P-VALUE (replaces old approximation)
+# ============================================================
+def _proper_spearman_with_pvalue(x, y):
+    n = len(x)
+    if n < 5: return 0.0, 1.0
+    def _rank(arr):
+        indexed = sorted(range(len(arr)), key=lambda i: arr[i])
+        ranks = [0.0]*len(arr)
+        i = 0
+        while i < len(arr):
+            j = i
+            while j < len(arr)-1 and arr[indexed[j]] == arr[indexed[j+1]]: j += 1
+            avg_rank = (i+j)/2.0+1.0
+            for k in range(i, j+1): ranks[indexed[k]] = avg_rank
+            i = j+1
+        return ranks
+    rx, ry = _rank(x), _rank(y)
+    mx, my = sum(rx)/n, sum(ry)/n
+    num = sum((a-mx)*(b-my) for a,b in zip(rx,ry))
+    dx = math.sqrt(sum((a-mx)**2 for a in rx))
+    dy = math.sqrt(sum((b-my)**2 for b in ry))
+    if dx==0 or dy==0: return 0.0, 1.0
+    rho = max(-1.0, min(1.0, num/(dx*dy)))
+    if abs(rho) >= 0.9999: return round(rho,4), 0.001
+    t_stat = rho * math.sqrt((n-2)/(1.0-rho*rho))
+    df = n-2
+    x_val = df/(df+t_stat*t_stat)
+    def _betacf(a,b,x_in):
+        eps=1e-12; qab=a+b; qap=a+1.0; qam=a-1.0; c=1.0
+        d=max(1.0-qab*x_in/qap, eps); d=1.0/d; h=d
+        for m in range(1,201):
+            m2=2*m; aa=m*(b-m)*x_in/((qam+m2)*(a+m2))
+            d=max(1.0+aa*d, eps); c=max(1.0+aa/c, eps); d=1.0/d; h*=d*c
+            aa=-(a+m)*(qab+m)*x_in/((a+m2)*(qap+m2))
+            d=max(1.0+aa*d, eps); c=max(1.0+aa/c, eps); d=1.0/d
+            delta=d*c; h*=delta
+            if abs(delta-1.0)<eps: break
+        return h
+    def _log_gamma(z):
+        if z<=0: return 0.0
+        c=[76.18009172947146,-86.50532032941677,24.01409824083091,-1.231739572450155,0.1208650973866179e-2,-0.5395239384953e-5]
+        y=z; tmp=z+5.5; tmp-=(z+0.5)*math.log(tmp); ser=1.000000000190015
+        for j in range(6): y+=1; ser+=c[j]/y
+        return -tmp+math.log(2.5066282746310005*ser/z)
+    def _betai(a,b,x_in):
+        if x_in<=0: return 0.0
+        if x_in>=1: return 1.0
+        ln_beta=_log_gamma(a)+_log_gamma(b)-_log_gamma(a+b)
+        front=math.exp(math.log(max(x_in,1e-300))*a+math.log(max(1.0-x_in,1e-300))*b-ln_beta)
+        if x_in<(a+1.0)/(a+b+2.0): return front*_betacf(a,b,x_in)/a
+        else: return 1.0-front*_betacf(b,a,1.0-x_in)/b
+    p_value = max(0.0001, min(1.0, _betai(df/2.0, 0.5, x_val)))
+    return round(rho,4), round(p_value,4)
+
+# ============================================================
 # STATIC DATA DICTIONARIES
 # ============================================================
 QUARTERLY_REVENUE = {
@@ -36,1239 +91,1327 @@ QUARTERLY_REVENUE = {
     "MDT_DM":{"2023-Q1":570,"2023-Q2":580,"2023-Q3":600,"2023-Q4":620,"2024-Q1":620,"2024-Q2":647,"2024-Q3":691,"2024-Q4":694,"2025-Q1":728,"2025-Q2":750,"2025-Q3":770,"2025-Q4":780,"2026-Q1":800},
     "SQEL":{},
 }
+REVENUE_LAST_UPDATED = "2026-03-15"
+
 INSTALLED_BASE_K = {
     "DXCM":{"2023-Q1":2000,"2023-Q2":2100,"2023-Q3":2200,"2023-Q4":2350,"2024-Q1":2500,"2024-Q2":2600,"2024-Q3":2750,"2024-Q4":2900,"2025-Q1":3000,"2025-Q2":3100,"2025-Q3":3250,"2025-Q4":3400,"2026-Q1":3550},
-    "PODD":{"2023-Q1":380,"2023-Q2":400,"2023-Q3":420,"2023-Q4":440,"2024-Q1":460,"2024-Q2":480,"2024-Q3":510,"2024-Q4":540,"2025-Q1":560,"2025-Q2":575,"2025-Q3":590,"2025-Q4":600,"2026-Q1":620},
-    "TNDM":{"2023-Q1":320,"2023-Q2":330,"2023-Q3":340,"2023-Q4":350,"2024-Q1":355,"2024-Q2":365,"2024-Q3":375,"2024-Q4":390,"2025-Q1":395,"2025-Q2":400,"2025-Q3":410,"2025-Q4":420,"2026-Q1":435},
-    "ABT_LIBRE":{"2023-Q1":4500,"2023-Q2":4700,"2023-Q3":4900,"2023-Q4":5100,"2024-Q1":5400,"2024-Q2":5800,"2024-Q3":6300,"2024-Q4":7000,"2025-Q1":7300,"2025-Q2":7600,"2025-Q3":7900,"2025-Q4":8200,"2026-Q1":8500},
-    "BBNX":{"2025-Q1":15,"2025-Q2":20,"2025-Q3":27,"2025-Q4":35,"2026-Q1":42},
-    "MDT_DM":{"2023-Q1":550,"2023-Q2":570,"2023-Q3":590,"2023-Q4":610,"2024-Q1":630,"2024-Q2":660,"2024-Q3":690,"2024-Q4":720,"2025-Q1":750,"2025-Q2":780,"2025-Q3":810,"2025-Q4":840,"2026-Q1":870},
+    "PODD":{"2023-Q1":380,"2023-Q2":400,"2023-Q3":420,"2023-Q4":440,"2024-Q1":460,"2024-Q2":480,"2024-Q3":510,"2024-Q4":540,"2025-Q1":560,"2025-Q2":590,"2025-Q3":620,"2025-Q4":660,"2026-Q1":700},
+    "TNDM":{"2023-Q1":380,"2023-Q2":390,"2023-Q3":400,"2023-Q4":410,"2024-Q1":420,"2024-Q2":430,"2024-Q3":445,"2024-Q4":460,"2025-Q1":470,"2025-Q2":480,"2025-Q3":495,"2025-Q4":510,"2026-Q1":520},
+    "ABT_LIBRE":{"2023-Q1":4500,"2023-Q2":4700,"2023-Q3":4900,"2023-Q4":5100,"2024-Q1":5300,"2024-Q2":5600,"2024-Q3":5900,"2024-Q4":6200,"2025-Q1":6400,"2025-Q2":6700,"2025-Q3":7000,"2025-Q4":7300,"2026-Q1":7600},
+    "BBNX":{"2025-Q1":2,"2025-Q2":4,"2025-Q3":7,"2025-Q4":12,"2026-Q1":18},
+    "MDT_DM":{"2023-Q1":800,"2023-Q2":820,"2023-Q3":850,"2023-Q4":880,"2024-Q1":900,"2024-Q2":930,"2024-Q3":960,"2024-Q4":1000,"2025-Q1":1050,"2025-Q2":1100,"2025-Q3":1150,"2025-Q4":1200,"2026-Q1":1250},
     "SQEL":{},
 }
+
 STOCK_MONTHLY = {
-    "DXCM":{"2023-01":107,"2023-02":112,"2023-03":117,"2023-04":120,"2023-05":118,"2023-06":130,"2023-07":128,"2023-08":100,"2023-09":92,"2023-10":88,"2023-11":116,"2023-12":124,"2024-01":123,"2024-02":129,"2024-03":134,"2024-04":131,"2024-05":112,"2024-06":110,"2024-07":76,"2024-08":72,"2024-09":74,"2024-10":73,"2024-11":80,"2024-12":82,"2025-01":85,"2025-02":80,"2025-03":76,"2025-04":68,"2025-05":72,"2025-06":78,"2025-07":75,"2025-08":70,"2025-09":65,"2025-10":68,"2025-11":74,"2025-12":79,"2026-01":77,"2026-02":80},
-    "PODD":{"2023-01":298,"2023-02":291,"2023-03":302,"2023-04":295,"2023-05":283,"2023-06":266,"2023-07":208,"2023-08":195,"2023-09":162,"2023-10":139,"2023-11":179,"2023-12":193,"2024-01":197,"2024-02":191,"2024-03":185,"2024-04":172,"2024-05":184,"2024-06":196,"2024-07":215,"2024-08":220,"2024-09":230,"2024-10":243,"2024-11":253,"2024-12":260,"2025-01":265,"2025-02":257,"2025-03":245,"2025-04":265,"2025-05":270,"2025-06":280,"2025-07":288,"2025-08":290,"2025-09":310,"2025-10":320,"2025-11":315,"2025-12":330,"2026-01":325,"2026-02":335},
-    "TNDM":{"2023-01":49,"2023-02":41,"2023-03":37,"2023-04":30,"2023-05":27,"2023-06":24,"2023-07":30,"2023-08":24,"2023-09":22,"2023-10":18,"2023-11":25,"2023-12":23,"2024-01":23,"2024-02":20,"2024-03":19,"2024-04":17,"2024-05":38,"2024-06":42,"2024-07":43,"2024-08":38,"2024-09":38,"2024-10":33,"2024-11":32,"2024-12":29,"2025-01":26,"2025-02":27,"2025-03":20,"2025-04":20,"2025-05":18,"2025-06":19,"2025-07":20,"2025-08":19,"2025-09":18,"2025-10":19,"2025-11":19,"2025-12":19,"2026-01":18,"2026-02":19},
-    "ABT_LIBRE":{"2023-01":112,"2023-02":104,"2023-03":101,"2023-04":108,"2023-05":107,"2023-06":109,"2023-07":106,"2023-08":103,"2023-09":98,"2023-10":93,"2023-11":105,"2023-12":110,"2024-01":113,"2024-02":117,"2024-03":118,"2024-04":110,"2024-05":107,"2024-06":104,"2024-07":107,"2024-08":113,"2024-09":114,"2024-10":118,"2024-11":117,"2024-12":116,"2025-01":119,"2025-02":123,"2025-03":128,"2025-04":126,"2025-05":130,"2025-06":133,"2025-07":120,"2025-08":117,"2025-09":119,"2025-10":121,"2025-11":123,"2025-12":126,"2026-01":128,"2026-02":130},
-    "BBNX":{"2025-02":17,"2025-03":19,"2025-04":22,"2025-05":20,"2025-06":18,"2025-07":19,"2025-08":21,"2025-09":20,"2025-10":21,"2025-11":22,"2025-12":23,"2026-01":24,"2026-02":25},
-    "MDT_DM":{"2023-01":78,"2023-02":80,"2023-03":82,"2023-04":83,"2023-05":84,"2023-06":86,"2023-07":85,"2023-08":84,"2023-09":82,"2023-10":80,"2023-11":82,"2023-12":84,"2024-01":85,"2024-02":84,"2024-03":86,"2024-04":85,"2024-05":83,"2024-06":82,"2024-07":80,"2024-08":82,"2024-09":84,"2024-10":86,"2024-11":88,"2024-12":87,"2025-01":88,"2025-02":87,"2025-03":89,"2025-04":88,"2025-05":90,"2025-06":91,"2025-07":89,"2025-08":88,"2025-09":87,"2025-10":88,"2025-11":89,"2025-12":90,"2026-01":91,"2026-02":92},
+    "DXCM":{"2023-01":112.5,"2023-02":115.2,"2023-03":119.8,"2023-04":122.1,"2023-05":118.3,"2023-06":130.5,"2023-07":133.2,"2023-08":127.4,"2023-09":92.5,"2023-10":88.2,"2023-11":95.6,"2023-12":98.4,"2024-01":120.3,"2024-02":127.8,"2024-03":133.5,"2024-04":131.2,"2024-05":116.8,"2024-06":112.4,"2024-07":78.5,"2024-08":72.3,"2024-09":71.1,"2024-10":70.5,"2024-11":78.2,"2024-12":82.1,"2025-01":80.5,"2025-02":78.3,"2025-03":75.8,"2025-04":79.2,"2025-05":82.1,"2025-06":85.6,"2025-07":88.4,"2025-08":86.3,"2025-09":83.7,"2025-10":80.1,"2025-11":76.5,"2025-12":74.2},
+    "PODD":{"2023-01":295.3,"2023-02":288.4,"2023-03":305.2,"2023-04":310.8,"2023-05":298.6,"2023-06":280.1,"2023-07":255.3,"2023-08":238.4,"2023-09":220.1,"2023-10":195.6,"2023-11":180.2,"2023-12":172.8,"2024-01":178.5,"2024-02":182.3,"2024-03":175.6,"2024-04":168.4,"2024-05":155.2,"2024-06":148.3,"2024-07":142.8,"2024-08":145.6,"2024-09":150.2,"2024-10":158.4,"2024-11":195.3,"2024-12":210.5,"2025-01":215.8,"2025-02":225.3,"2025-03":248.6,"2025-04":260.2,"2025-05":272.1,"2025-06":285.4,"2025-07":290.3,"2025-08":295.8,"2025-09":302.1,"2025-10":310.5,"2025-11":315.2,"2025-12":320.8},
+    "TNDM":{"2023-01":48.5,"2023-02":42.3,"2023-03":38.8,"2023-04":28.5,"2023-05":26.2,"2023-06":28.8,"2023-07":30.5,"2023-08":25.6,"2023-09":23.4,"2023-10":20.8,"2023-11":22.5,"2023-12":21.3,"2024-01":22.8,"2024-02":20.5,"2024-03":19.8,"2024-04":18.5,"2024-05":17.2,"2024-06":38.5,"2024-07":42.3,"2024-08":40.8,"2024-09":38.5,"2024-10":35.2,"2024-11":40.5,"2024-12":42.8,"2025-01":44.2,"2025-02":46.5,"2025-03":48.8,"2025-04":50.2,"2025-05":52.5,"2025-06":48.3,"2025-07":45.8,"2025-08":42.5,"2025-09":40.2,"2025-10":38.5,"2025-11":36.2,"2025-12":35.5},
+    "ABT":{"2023-01":108.5,"2023-02":102.3,"2023-03":98.8,"2023-04":105.2,"2023-05":103.6,"2023-06":108.4,"2023-07":105.8,"2023-08":102.5,"2023-09":98.2,"2023-10":95.8,"2023-11":105.3,"2023-12":110.2,"2024-01":112.5,"2024-02":115.8,"2024-03":118.2,"2024-04":108.5,"2024-05":105.2,"2024-06":102.8,"2024-07":107.5,"2024-08":112.3,"2024-09":115.8,"2024-10":118.2,"2024-11":120.5,"2024-12":115.2,"2025-01":118.5,"2025-02":122.3,"2025-03":125.8,"2025-04":128.2,"2025-05":130.5,"2025-06":132.8,"2025-07":135.2,"2025-08":133.5,"2025-09":130.8,"2025-10":128.2,"2025-11":126.5,"2025-12":125.8},
+    "BBNX":{"2025-02":25.0,"2025-03":28.5,"2025-04":32.1,"2025-05":30.5,"2025-06":28.8,"2025-07":26.5,"2025-08":24.2,"2025-09":22.8,"2025-10":20.5,"2025-11":18.2,"2025-12":16.5},
+    "MDT":{"2023-01":78.5,"2023-02":80.2,"2023-03":82.5,"2023-04":85.3,"2023-05":83.8,"2023-06":86.5,"2023-07":88.2,"2023-08":85.6,"2023-09":80.2,"2023-10":78.5,"2023-11":82.3,"2023-12":84.5,"2024-01":86.2,"2024-02":85.8,"2024-03":87.5,"2024-04":82.3,"2024-05":80.5,"2024-06":78.8,"2024-07":80.2,"2024-08":82.5,"2024-09":85.8,"2024-10":88.2,"2024-11":90.5,"2024-12":88.2,"2025-01":86.5,"2025-02":85.2,"2025-03":83.8,"2025-04":82.5,"2025-05":84.2,"2025-06":86.8,"2025-07":88.5,"2025-08":90.2,"2025-09":92.5,"2025-10":94.8,"2025-11":96.2,"2025-12":95.5},
 }
+_stock_source = "HARDCODED"
+
+# Known recall batch windows for smoothing
+RECALL_BATCH_WINDOWS = {
+    "DXCM": [
+        ("2025-01","2025-04","G6 touchscreen receiver software recall (Jan 2025)"),
+        ("2025-05","2025-12","Class I G6/G7/ONE/ONE+ receiver speaker recall (May 2025, 700K+ units)"),
+        ("2026-01","2026-06","Continued recall batch reporting tail"),
+    ],
+    "PODD": [("2023-10","2024-01","Omnipod 5 occlusion alert software update")],
+    "TNDM": [],
+    "ABT": [],
+    "BBNX": [],
+    "MDT": [],
+}
+
 PRODUCT_EVENTS = {
-    "DXCM_G7":[{"date":"2023-02","type":"LAUNCH","desc":"G7 10-day launched in US"},{"date":"2025-03","type":"WARNING","desc":"FDA Warning Letter: unauthorized sensor coating change"},{"date":"2025-09","type":"CLASS I","desc":"App defect prevented sensor failure alerts"},{"date":"2025-10","type":"NEWS","desc":"Hunterbrook: 13+ G7 deaths; class actions filed"}],
-    "DXCM_G7_15DAY":[{"date":"2025-10","type":"LAUNCH","desc":"15-Day launched; ~26% may not last full 15 days"}],
-    "DXCM_G6":[{"date":"2025-06","type":"CLASS I","desc":"36,800+ G6 receivers recalled: speaker defect"}],
-    "DXCM_ONE":[{"date":"2025-06","type":"CLASS I","desc":"ONE/ONE+ in speaker recall"}],
-    "DXCM_ALL":[{"date":"2025-06","type":"CLASS I","desc":"703K+ receivers recalled (speaker)"},{"date":"2025-03","type":"WARNING","desc":"Warning Letter: G6/G7 adulterated"}],
-    "PODD_OP5":[{"date":"2025-03","type":"CORRECTION","desc":"Voluntary pod correction; guidance maintained"}],
-    "PODD_ALL":[{"date":"2025-03","type":"CORRECTION","desc":"Pod correction; stock -37% from peak"}],
-    "SQEL_TWIIST":[{"date":"2024-03","type":"FDA CLEAR","desc":"De Novo clearance"},{"date":"2025-07","type":"LAUNCH","desc":"US launch"},{"date":"2026-03","type":"EXPANSION","desc":"Broad US availability"}],
-    "TNDM_TSLIM":[{"date":"2025-12","type":"LAUNCH","desc":"t:slim X2 + Libre 3 Plus global rollout"}],
-    "TNDM_MOBI":[{"date":"2025-11","type":"LAUNCH","desc":"Android control launched"}],
-    "BBNX_ILET":[{"date":"2023-05","type":"LAUNCH","desc":"iLet US launch"},{"date":"2025-02","type":"IPO","desc":"BBNX IPO on Nasdaq"}],
-    "MDT_780G":[{"date":"2023-04","type":"LAUNCH","desc":"MiniMed 780G + Guardian 4 FDA cleared"},{"date":"2025-04","type":"LAUNCH","desc":"Simplera Sync approved for 780G"},{"date":"2025-05","type":"NEWS","desc":"Diabetes spinoff announced"}],
+    "DXCM_G7":[{"date":"2024-03","label":"FDA Warning Letter","type":"regulatory"},{"date":"2025-04","label":"G7 15-Day Cleared","type":"launch"},{"date":"2025-05","label":"Class I Recall (Receiver)","type":"recall"}],
+    "DXCM_G6":[{"date":"2024-03","label":"FDA Warning Letter","type":"regulatory"},{"date":"2025-01","label":"G6 Receiver SW Recall","type":"recall"},{"date":"2025-05","label":"Class I Recall (Receiver)","type":"recall"}],
+    "DXCM_ALL":[{"date":"2024-03","label":"FDA Warning Letter","type":"regulatory"},{"date":"2025-05","label":"Class I Recall","type":"recall"}],
+    "PODD_OP5":[{"date":"2024-09","label":"OP5 Gen2 Launch","type":"launch"}],
+    "PODD_DASH":[],
+    "PODD_ALL":[{"date":"2024-09","label":"OP5 Gen2 Launch","type":"launch"}],
+    "TNDM_TSLIM":[{"date":"2024-06","label":"Mobi Launch","type":"launch"}],
+    "TNDM_MOBI":[{"date":"2024-06","label":"Mobi Cleared","type":"launch"}],
+    "TNDM_ALL":[{"date":"2024-06","label":"Mobi Launch","type":"launch"}],
+    "ABT_LIBRE":[],
+    "ABT_ALL":[],
+    "BBNX_ILET":[{"date":"2025-02","label":"IPO","type":"launch"}],
+    "MDT_780G":[],
+    "MDT_ALL":[],
+    "SQEL_TWIIST":[],
 }
+
 DEVICES = [
-    {"id":"DXCM_G7_15DAY","name":"Dexcom G7 15-Day","ticker":"DXCM","company":"Dexcom","search":'device.brand_name:"dexcom+g7+15"',"description":"Latest 15-day CGM. ~26% may not last full 15 days. Very early MAUDE lifecycle."},
-    {"id":"DXCM_G7","name":"Dexcom G7 (10-Day)","ticker":"DXCM","company":"Dexcom","search":'device.brand_name:"dexcom+g7" AND NOT device.brand_name:"15"',"description":"Primary CGM. KEY RISK. FDA Warning Letter, two Class I recalls, 13+ deaths."},
-    {"id":"DXCM_G6","name":"Dexcom G6","ticker":"DXCM","company":"Dexcom","search":'device.brand_name:"dexcom+g6"',"description":"Legacy CGM phasing out. June 2025 receiver recall (36,800+ units)."},
-    {"id":"DXCM_STELO","name":"Dexcom Stelo","ticker":"DXCM","company":"Dexcom","search":'device.brand_name:stelo',"description":"First OTC CGM for Type 2 non-insulin users."},
-    {"id":"DXCM_ONE","name":"Dexcom ONE/ONE+","ticker":"DXCM","company":"Dexcom","search":'device.brand_name:"dexcom+one"',"description":"Value-tier international CGM. In June 2025 recall."},
-    {"id":"DXCM_ALL","name":"All Dexcom","ticker":"DXCM","company":"Dexcom","search":'device.brand_name:dexcom',"description":"Company-level. FY2025: ~$4.7B. ~3.4M users. 2026 guide: $5.16-5.25B."},
-    {"id":"PODD_OP5","name":"Omnipod 5","ticker":"PODD","company":"Insulet","search":'device.brand_name:"omnipod+5"',"description":"#1 AID pump in US. Self-reported pod correction Mar 2025."},
-    {"id":"PODD_DASH","name":"Omnipod DASH","ticker":"PODD","company":"Insulet","search":'device.brand_name:"omnipod+dash"',"description":"Legacy pump declining."},
-    {"id":"PODD_ALL","name":"All Omnipod","ticker":"PODD","company":"Insulet","search":'device.brand_name:omnipod',"description":"Company-level. FY2025: ~$2.7B. >600K users."},
-    {"id":"TNDM_TSLIM","name":"t:slim X2","ticker":"TNDM","company":"Tandem","search":'device.brand_name:"t:slim"',"description":"Tubed pump with Control-IQ+. Integrates with Libre 3 Plus."},
-    {"id":"TNDM_MOBI","name":"Tandem Mobi","ticker":"TNDM","company":"Tandem","search":'device.brand_name:"tandem+mobi"',"description":"Smallest tubed pump. Mobile-first."},
-    {"id":"TNDM_ALL","name":"All Tandem","ticker":"TNDM","company":"Tandem","search":'device.brand_name:tandem',"description":"Company-level. FY2025: $1.01B. Cleanest FDA profile."},
-    {"id":"ABT_LIBRE3","name":"Libre 3/3+","ticker":"ABT_LIBRE","company":"Abbott","search":'device.brand_name:"freestyle+libre+3"',"description":"DXCM competitor. 14-day. ~7M+ users."},
-    {"id":"ABT_LIBRE2","name":"Libre 2","ticker":"ABT_LIBRE","company":"Abbott","search":'device.brand_name:"freestyle+libre+2"',"description":"Previous-gen. Phasing out."},
-    {"id":"ABT_LIBRE_ALL","name":"All Libre","ticker":"ABT_LIBRE","company":"Abbott","search":'device.brand_name:"freestyle+libre"',"description":"Benchmark. FY2024 Diabetes: $6.8B."},
-    {"id":"BBNX_ILET","name":"iLet Bionic Pancreas","ticker":"BBNX","company":"Beta Bionics","search":'device.brand_name:"ilet"',"description":"Autonomous AID. FY2025: $100.3M. 35K users. IPO Feb 2025."},
-    {"id":"BBNX_ALL","name":"All Beta Bionics","ticker":"BBNX","company":"Beta Bionics","search":'device.brand_name:"bionic+pancreas" OR device.brand_name:"ilet"',"description":"Nasdaq: BBNX. 2026 guide: $130-135M."},
-    {"id":"MDT_780G","name":"MiniMed 780G","ticker":"MDT_DM","company":"Medtronic","search":'device.brand_name:"minimed+780"',"description":"AID pump + Simplera Sync. 6 quarters double-digit growth."},
-    {"id":"MDT_SIMPLERA","name":"Simplera Sync CGM","ticker":"MDT_DM","company":"Medtronic","search":'device.brand_name:simplera',"description":"MDT CGM for 780G. FDA Apr 2025."},
-    {"id":"MDT_DM_ALL","name":"All MDT Diabetes","ticker":"MDT_DM","company":"Medtronic","search":'device.brand_name:minimed OR device.brand_name:simplera',"description":"SEGMENT (not standalone). FY2025: $2.76B. Spinoff pending. Stock = MDT parent."},
-    {"id":"SQEL_TWIIST","name":"twiist AID","ticker":"SQEL","company":"Sequel Med Tech","search":'device.brand_name:twiist',"description":"Private. Tubeless AID with iiSure sound-wave dosing."},
+    {"id":"DXCM_G7","name":"Dexcom G7","search":"dexcom+g7","ticker":"DXCM","rev_key":"DXCM","company":"Dexcom","is_combined":False},
+    {"id":"DXCM_G6","name":"Dexcom G6","search":"dexcom+g6","ticker":"DXCM","rev_key":"DXCM","company":"Dexcom","is_combined":False},
+    {"id":"DXCM_ALL","name":"Dexcom (All CGM)","search":"dexcom","ticker":"DXCM","rev_key":"DXCM","company":"Dexcom","is_combined":True},
+    {"id":"PODD_OP5","name":"Omnipod 5","search":"omnipod+5","ticker":"PODD","rev_key":"PODD","company":"Insulet","is_combined":False},
+    {"id":"PODD_DASH","name":"Omnipod DASH","search":"omnipod+dash","ticker":"PODD","rev_key":"PODD","company":"Insulet","is_combined":False},
+    {"id":"PODD_ALL","name":"Insulet (All Omnipod)","search":"omnipod","ticker":"PODD","rev_key":"PODD","company":"Insulet","is_combined":True},
+    {"id":"TNDM_TSLIM","name":"t:slim X2","search":"tandem+t:slim","ticker":"TNDM","rev_key":"TNDM","company":"Tandem","is_combined":False},
+    {"id":"TNDM_MOBI","name":"Tandem Mobi","search":"tandem+mobi","ticker":"TNDM","rev_key":"TNDM","company":"Tandem","is_combined":False},
+    {"id":"TNDM_ALL","name":"Tandem (All Pumps)","search":"tandem+diabetes","ticker":"TNDM","rev_key":"TNDM","company":"Tandem","is_combined":True},
+    {"id":"ABT_LIBRE","name":"Abbott FreeStyle Libre","search":"freestyle+libre","ticker":"ABT","rev_key":"ABT_LIBRE","company":"Abbott","is_combined":False},
+    {"id":"ABT_ALL","name":"Abbott (All Libre)","search":"abbott+libre","ticker":"ABT","rev_key":"ABT_LIBRE","company":"Abbott","is_combined":True},
+    {"id":"BBNX_ILET","name":"Beta Bionics iLet","search":"beta+bionics+ilet","ticker":"BBNX","rev_key":"BBNX","company":"Beta Bionics","is_combined":True},
+    {"id":"MDT_780G","name":"Medtronic 780G","search":"medtronic+780g","ticker":"MDT","rev_key":"MDT_DM","company":"Medtronic","is_combined":False},
+    {"id":"MDT_ALL","name":"Medtronic (All DM)","search":"medtronic+insulin+pump","ticker":"MDT","rev_key":"MDT_DM","company":"Medtronic","is_combined":True},
+    {"id":"SQEL_TWIIST","name":"Sequel twiist","search":"sequel+twiist","ticker":"SQEL","rev_key":"SQEL","company":"Sequel","is_combined":True},
 ]
-Z_WARN,Z_ELEVATED,Z_CRITICAL=1.5,2.0,3.0
-BASE_URL="https://api.fda.gov/device/event.json"
-COMPANIES=["Dexcom","Insulet","Tandem","Abbott","Beta Bionics","Medtronic","Sequel Med Tech"]
-
-# V3.2: Add case study companies + devices
-for _co in ["Procept BioRobotics","Inspire Medical Systems","CVRx"]:
-    if _co not in COMPANIES: COMPANIES.append(_co)
-DEVICES.extend([
-    {"id":"PRCT_AQUABEAM","name":"AquaBeam Robotic System","ticker":"PRCT","company":"Procept BioRobotics",
-     "search":'device.brand_name:aquabeam',
-     "description":"Nasdaq: PRCT. Aquablation therapy for BPH. IPO Sep 2021. Class 2 recalls 2022 & 2025.",
-     "case_study":True},
-    {"id":"INSP_INSPIRE","name":"Inspire Sleep System","ticker":"INSP","company":"Inspire Medical Systems",
-     "search":'device.brand_name:inspire AND device.generic_name:hypoglossal',
-     "description":"NYSE: INSP. Hypoglossal nerve stimulator for OSA. Class I recall Jun 2024. -82pct from ATH.",
-     "case_study":True},
-    {"id":"CVRX_BAROSTIM","name":"Barostim System","ticker":"CVRX","company":"CVRx",
-     "search":'device.brand_name:barostim',
-     "description":"Nasdaq: CVRX. Neuromodulation for heart failure. Breakthrough Device. DRG 276 Oct 2024.",
-     "case_study":True},
-])
+COMPANIES = list(dict.fromkeys(d["company"] for d in DEVICES))
 
 # ============================================================
-# CORE API + STATS FUNCTIONS
+# LIVE STOCK PRICES VIA YFINANCE
 # ============================================================
-def _q(s): return url_quote(s,safe='+:"[]')
-def api_get(url,retries=3):
-    for a in range(retries):
-        try:
-            with urlopen(Request(url,headers={"User-Agent":"MAUDE/3.2"}),timeout=30) as r: return json.loads(r.read())
-        except:
-            if a<retries-1: time.sleep(2**a)
-    return None
-def fetch_counts(sq,df="date_received",start="20230101"):
-    end=datetime.now().strftime("%Y%m%d")
-    d=api_get(f"{BASE_URL}?search={_q(sq)}+AND+{df}:[{start}+TO+{end}]&count={df}")
-    if not d or "results" not in d: return {}
-    c={}
-    for r in d["results"]:
-        t=r.get("time","")
-        if len(t)>=6: ym=f"{t[:4]}-{t[4:6]}"; c[ym]=c.get(ym,0)+r.get("count",0)
-    return c
-def fetch_severity(sq,start="20230101"):
-    end=datetime.now().strftime("%Y%m%d"); sv={}
-    for et in ["death","injury","malfunction"]:
-        d=api_get(f"{BASE_URL}?search={_q(sq)}+AND+date_received:[{start}+TO+{end}]+AND+event_type:{et}&count=date_received")
-        if d and "results" in d:
-            for r in d["results"]:
-                t=r.get("time","")
-                if len(t)>=6:
-                    ym=f"{t[:4]}-{t[4:6]}"
-                    if ym not in sv: sv[ym]={"death":0,"injury":0,"malfunction":0}
-                    sv[ym][et]+=r.get("count",0)
-        time.sleep(0.5)
-    return sv
-def m2q(ym):
-    y,m=ym.split("-"); return f"{y}-Q{(int(m)-1)//3+1}"
-def compute_stats(md,sv,tk,w=12):
-    ms=sorted(md.keys())
-    if len(ms)<3: return []
-    res=[]
-    for i,m in enumerate(ms):
-        c=md[m]; tr=[md[ms[j]] for j in range(max(0,i-w+1),i+1)]
-        avg=sum(tr)/len(tr); sd=(sum((x-avg)**2 for x in tr)/len(tr))**.5 if len(tr)>1 else 0
-        z=(c-avg)/sd if sd>0 else 0
-        ma6v=sum(tr[-6:])/len(tr[-6:]) if len(tr)>=6 else sum(tr)/len(tr)
-        s=sv.get(m,{"death":0,"injury":0,"malfunction":0})
-        ss=s.get("death",0)*10+s.get("injury",0)*3+s.get("malfunction",0)
-        q=m2q(m); rv=QUARTERLY_REVENUE.get(tk,{}).get(q); rpm=round(c/(rv/3),2) if rv else None
-        ib=INSTALLED_BASE_K.get(tk,{}).get(q); rp10k=round(c/(ib/10),4) if ib else None
-        sl=0
-        if i>=5:
-            rc=[md[ms[j]] for j in range(i-5,i+1)]; xm=2.5; ym_=sum(rc)/6
-            n=sum((x-xm)*(y-ym_) for x,y in zip(range(6),rc))
-            dn=sum((x-xm)**2 for x in range(6)); sl=round(n/dn,2) if dn>0 else 0
-        res.append({"month":m,"count":c,"avg_12m":round(avg,1),"sd_12m":round(sd,1),"z_score":round(z,2),"ma6":round(ma6v,1),"upper_1sd":round(avg+sd,1),"upper_2sd":round(avg+2*sd,1),"lower_1sd":round(max(0,avg-sd),1),"lower_2sd":round(max(0,avg-2*sd),1),"deaths":s.get("death",0),"injuries":s.get("injury",0),"malfunctions":s.get("malfunction",0),"severity_score":round(ss,1),"rate_per_m":rpm,"rate_per_10k":rp10k,"slope_6m":sl,"quarter":q})
-    return res
-def compute_r_score(sl):
-    if len(sl)<6: return None
-    lt=sl[-1]; zc=min(20,abs(lt["z_score"])*6.67)
-    rs=sum(s["severity_score"] for s in sl[-3:])/3; ps=sum(s["severity_score"] for s in sl[-6:-3])/3 if len(sl)>=6 else rs
-    sc=min(20,max(0,(rs/ps-1)*40)) if ps>0 else 10
-    rr=[s["rate_per_m"] for s in sl[-3:] if s["rate_per_m"]]; pr=[s["rate_per_m"] for s in sl[-6:-3] if s["rate_per_m"]]
-    gc=min(20,max(0,((sum(rr)/len(rr))/(sum(pr)/len(pr))-1)*80)) if rr and pr and sum(pr)/len(pr)>0 else 10
-    sp=lt["slope_6m"]/lt["avg_12m"]*100 if lt["avg_12m"]>0 else 0; slc=min(20,max(0,sp*2))
-    ri=[s["rate_per_10k"] for s in sl[-3:] if s["rate_per_10k"]]; pi=[s["rate_per_10k"] for s in sl[-6:-3] if s["rate_per_10k"]]
-    ic=min(20,max(0,((sum(ri)/len(ri))/(sum(pi)/len(pi))-1)*80)) if ri and pi and sum(pi)/len(pi)>0 else 10
-    t=min(100,zc+sc+gc+slc+ic)
-    return {"total":round(t,1),"z_c":round(zc,1),"sev_c":round(sc,1),"gap_c":round(gc,1),"slope_c":round(slc,1),"ib_c":round(ic,1),"signal":"CRITICAL" if t>=70 else "ELEVATED" if t>=50 else "WATCH" if t>=30 else "NORMAL"}
-def detect_batch(recv,evnt):
-    f={}
-    for m in recv:
-        r=recv.get(m,0); e=evnt.get(m,0); ratio=r/e if e>0 else None
-        f[m]={"is_batch":(ratio or 0)>3,"ratio":round(ratio,2) if ratio else None}
-    return f
-
-# ============================================================
-# MODULE 1: Enhanced Correlation
-# ============================================================
-def compute_enhanced_correlation(maude_counts, stock_prices, max_lag=6):
-    try:
-        common = sorted(set(maude_counts.keys()) & set(stock_prices.keys()))
-        if len(common) < 12:
-            return {"status":"insufficient_data","message":f"Only {len(common)} overlapping months. Need 12+."}
-        mc = [maude_counts[m] for m in common]
-        sp = [stock_prices[m] for m in common]
-        sr = [(sp[i]-sp[i-1])/sp[i-1]*100 if sp[i-1]>0 else 0 for i in range(1,len(sp))]
-        mc = mc[1:]; common = common[1:]
-        if len(mc) < 10:
-            return {"status":"insufficient_data","message":"Not enough data after alignment."}
-        def _rank(arr):
-            s = sorted(range(len(arr)), key=lambda i: arr[i])
-            ranks = [0]*len(arr)
-            for i,idx in enumerate(s): ranks[idx] = i+1
-            return ranks
-        def _spearman(x, y):
-            n = len(x)
-            if n < 5: return 0, 1.0
-            rx, ry = _rank(x), _rank(y)
-            d2 = sum((a-b)**2 for a,b in zip(rx,ry))
-            rho = 1 - 6*d2/(n*(n*n-1))
-            if abs(rho) >= 1: return rho, 0.0
-            t = rho * math.sqrt((n-2)/(1-rho*rho))
-            p = max(0.001, min(1.0, 2 * math.exp(-0.717*abs(t) - 0.416*t*t/max(1,n))))
-            return round(rho, 4), round(p, 4)
-        best_rho, best_p, best_lag = 0, 1.0, 0
-        lag_results = {}
-        for lag in range(0, min(max_lag+1, len(mc)-5)):
-            m_slice = mc[:len(mc)-lag] if lag > 0 else mc
-            s_slice = sr[lag:] if lag > 0 else sr
-            min_len = min(len(m_slice), len(s_slice))
-            if min_len < 5: continue
-            rho, p = _spearman(m_slice[:min_len], s_slice[:min_len])
-            lag_results[f"{lag}mo"] = {"rho": rho, "p": p}
-            if abs(rho) > abs(best_rho):
-                best_rho, best_p, best_lag = rho, p, lag
-        sig = best_p < 0.05
-        direction = "negative" if best_rho < 0 else "positive"
-        msg = f"Best correlation: rho={best_rho:+.3f} at {best_lag}mo lag (p={best_p:.3f}). "
-        if sig and best_rho < -0.2: msg += f"MAUDE spikes predict stock declines {best_lag} months later."
-        elif sig and best_rho > 0.2: msg += f"MAUDE and stock move together (market already pricing in)."
-        else: msg += "No statistically significant lead-lag relationship detected."
-        return {"status":"ok","best_rho":best_rho,"best_p":best_p,"best_lag":best_lag,
-                "significant":sig,"direction":direction,"lag_results":lag_results,"message":msg}
-    except Exception as e:
-        return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# MODULE 2: Failure Mode NLP
-# ============================================================
-def analyze_failure_modes(search_query, start, limit=50):
-    try:
-        end = datetime.now().strftime("%Y%m%d")
-        url = f"{BASE_URL}?search={_q(search_query)}+AND+date_received:[{start}+TO+{end}]&limit={limit}"
-        d = api_get(url)
-        if not d or "results" not in d:
-            return {"status":"no_data","message":"No MAUDE events returned for NLP analysis."}
-        categories = {
-            "sensor_failure":{"label":"Sensor Failure","keywords":["sensor fail","sensor error","sensor malfunction","no reading","lost signal","inaccurate reading","reading error","cgm fail"],"desc":"Sensor stopped working, gave wrong readings, or lost connectivity.","count":0},
-            "adhesion":{"label":"Adhesion / Wearability","keywords":["fell off","adhesive","peel","skin irritat","rash","allergy","came off","detach","blister"],"desc":"Device detached early, caused skin reaction, or adhesive failed.","count":0},
-            "insertion":{"label":"Insertion Problems","keywords":["insertion","inserter","needle","pain during","bent cannula","kinked","failed to insert","applicator"],"desc":"Problems during device insertion or with the insertion mechanism.","count":0},
-            "software_app":{"label":"Software / App Issues","keywords":["app crash","bluetooth","connect","pair","display error","software","firmware","update fail","notification"],"desc":"Mobile app, connectivity, firmware, or display problems.","count":0},
-            "occlusion":{"label":"Occlusion / Blockage","keywords":["occlusion","blockage","blocked","no delivery","no insulin","air bubble","leak"],"desc":"Insulin delivery blocked or interrupted.","count":0},
-            "alarm":{"label":"Alarm / Alert Failure","keywords":["alarm","alert","no warning","did not alert","speaker","vibrat","sound"],"desc":"Device failed to alert user to critical events.","count":0},
-            "hyperglycemia":{"label":"Hyperglycemia Event","keywords":["hyperglycemi","high blood sugar","dka","diabetic ketoacidosis","high glucose","blood sugar high"],"desc":"Serious high blood sugar event potentially linked to device failure.","count":0},
-            "hypoglycemia":{"label":"Hypoglycemia Event","keywords":["hypoglycemi","low blood sugar","seizure","unconscious","passed out","low glucose","blood sugar low"],"desc":"Serious low blood sugar event potentially linked to device failure.","count":0},
-            "battery":{"label":"Battery / Power","keywords":["battery","charge","power","dead","shut down","won't turn on","drain"],"desc":"Battery drain, charging failure, or unexpected power loss.","count":0},
-            "other":{"label":"Other / Unclassified","keywords":[],"desc":"Events not matching other categories.","count":0},
-        }
-        total = 0
-        for event in d["results"]:
-            texts = []
-            for narrative in event.get("mdr_text", []):
-                txt = narrative.get("text", "")
-                if txt: texts.append(txt.lower())
-            if not texts: continue
-            full_text = " ".join(texts); total += 1; matched = False
-            for cat_id, cat in categories.items():
-                if cat_id == "other": continue
-                for kw in cat["keywords"]:
-                    if kw in full_text: cat["count"] += 1; matched = True; break
-            if not matched: categories["other"]["count"] += 1
-        if total == 0:
-            return {"status":"no_text","message":"Events found but none contained narrative text for NLP."}
-        modes = {}
-        for cat_id, cat in categories.items():
-            if cat["count"] > 0:
-                modes[cat_id] = {"label":cat["label"],"count":cat["count"],"pct":round(cat["count"]/total*100,1),"desc":cat["desc"]}
-        return {"status":"ok","total_analyzed":total,"modes":modes,"message":f"Classified {total} reports into {len(modes)} failure categories."}
-    except Exception as e:
-        return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# MODULE 3: EDGAR Filing Activity
-# ============================================================
-TICKER_TO_CIK = {"DXCM":"1093557","PODD":"1145197","TNDM":"1438133","ABT_LIBRE":"1800","BBNX":"1842356","MDT_DM":"1613103"}
-def analyze_edgar_filings(ticker):
-    try:
-        cik = TICKER_TO_CIK.get(ticker)
-        if not cik: return {"status":"no_cik","message":f"No CIK mapping for {ticker}."}
-        filing_url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
-        fd = api_get(filing_url)
-        if not fd or "filings" not in fd: return {"status":"no_filings","message":f"Could not retrieve EDGAR filings for CIK {cik}."}
-        recent = fd["filings"].get("recent", {}); forms = recent.get("form", []); dates = recent.get("filingDate", [])
-        count_10k = sum(1 for f in forms[:20] if f in ("10-K","10-K/A"))
-        count_10q = sum(1 for f in forms[:20] if f in ("10-Q","10-Q/A"))
-        latest_date = dates[0] if dates else "unknown"
-        msg = f"Found {count_10k} annual and {count_10q} quarterly filings in recent history. Latest filing: {latest_date}. Framework ready for deep scan."
-        return {"status":"ok","message":msg,"annual_filings":count_10k,"quarterly_filings":count_10q,"latest_date":latest_date}
-    except Exception as e:
-        return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# MODULE 4: Insider Trading (basic)
-# ============================================================
-def analyze_insider_trading(ticker):
-    try:
-        cik = TICKER_TO_CIK.get(ticker)
-        if not cik: return {"status":"no_cik","message":f"No CIK for {ticker}."}
-        url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
-        d = api_get(url)
-        if not d or "filings" not in d: return {"status":"no_filings","message":"Could not retrieve EDGAR data."}
-        recent = d["filings"].get("recent", {}); forms = recent.get("form", []); dates = recent.get("filingDate", [])
-        cutoff = (datetime.now().replace(day=1) - __import__('datetime').timedelta(days=90)).strftime("%Y-%m-%d")
-        form4_count = 0; recent_dates = []
-        for i, f in enumerate(forms):
-            if f in ("4", "4/A") and i < len(dates) and dates[i] >= cutoff: form4_count += 1; recent_dates.append(dates[i])
-        if form4_count == 0: return {"status":"no_signals","message":"No Form 4 insider transactions in the last 90 days."}
-        signal = "high" if form4_count > 10 else "moderate" if form4_count > 5 else "low"
-        msg = f"{form4_count} Form 4 filings in last 90 days. "
-        if form4_count > 10: msg += "HIGH insider activity."
-        elif form4_count > 5: msg += "Moderate insider activity."
-        else: msg += "Low insider activity."
-        return {"status":"ok","message":msg,"form4_count":form4_count,"signal":signal,"latest_date":recent_dates[0] if recent_dates else None}
-    except Exception as e:
-        return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# MODULE 5: Clinical Trials
-# ============================================================
-TICKER_TO_TRIAL_QUERY = {"DXCM":"dexcom","PODD":"omnipod OR insulet","TNDM":"tandem diabetes","ABT_LIBRE":"freestyle libre","BBNX":"beta bionics OR ilet","MDT_DM":"medtronic diabetes OR minimed","SQEL":"sequel med tech OR twiist"}
-def analyze_clinical_trials(ticker):
-    try:
-        query = TICKER_TO_TRIAL_QUERY.get(ticker)
-        if not query: return {"status":"no_query","message":f"No trial search query for {ticker}."}
-        url = f"https://clinicaltrials.gov/api/v2/studies?query.term={url_quote(query)}&filter.overallStatus=RECRUITING,ACTIVE_NOT_RECRUITING&pageSize=10"
-        d = api_get(url)
-        if not d or "studies" not in d: return {"status":"no_trials","message":"No active/recruiting trials found."}
-        trials = []
-        for study in d["studies"][:5]:
-            proto = study.get("protocolSection", {}); ident = proto.get("identificationModule", {}); status_mod = proto.get("statusModule", {})
-            trials.append({"nct_id":ident.get("nctId","N/A"),"title":ident.get("briefTitle","N/A")[:120],"status":status_mod.get("overallStatus","N/A")})
-        if not trials: return {"status":"no_trials","message":"API returned data but no matching studies."}
-        return {"status":"ok","trials":trials,"total":len(d["studies"]),"message":f"{len(d['studies'])} active/recruiting trials found."}
-    except Exception as e:
-        return {"status":"error","message":str(e)[:200]}
-
-# END OF PART 1 — paste Part 2 directly below this line
-# ============================================================
-# MODULE 6-9: Framework modules
-# ============================================================
-def analyze_google_trends(ticker):
-    return {"status":"no_pytrends","message":"Google Trends requires pytrends package. Install with: pip install pytrends."}
-def analyze_short_interest(ticker):
-    if ticker in ("SQEL",): return {"status":"no_ticker","message":"Private company. No short interest data."}
-    return {"status":"framework","message":f"Short interest tracking for {ticker} requires Yahoo Finance or similar. Framework ready."}
-def analyze_payer_coverage(ticker):
-    return {"status":"framework","message":"CMS coverage decisions tracked manually. CGM has broad Medicare Part B coverage since 2017 (expanded 2023 for Type 2)."}
-def analyze_international(ticker, brand_names):
-    return {"status":"framework","message":f"MHRA (UK) device alerts for {', '.join(brand_names)}. GOV.UK has no structured API. Manual monitoring required."}
-
-# ============================================================
-# MODULE 10: Recall Probability
-# ============================================================
-def compute_recall_probability(failure_modes, stats):
-    try:
-        if not stats or len(stats) < 6: return {"status":"insufficient_data","message":"Need 6+ months of data."}
-        lt = stats[-1]; prob = 0.0; factors = []
-        if lt["z_score"] > Z_CRITICAL: prob += 0.25; factors.append(f"Z-score {lt['z_score']:+.2f} > {Z_CRITICAL} (critical)")
-        elif lt["z_score"] > Z_ELEVATED: prob += 0.15; factors.append(f"Z-score {lt['z_score']:+.2f} > {Z_ELEVATED} (elevated)")
-        elif lt["z_score"] > Z_WARN: prob += 0.05; factors.append(f"Z-score {lt['z_score']:+.2f} > {Z_WARN} (watch)")
-        d3 = sum(s["deaths"] for s in stats[-3:])
-        if d3 > 5: prob += 0.30; factors.append(f"{d3} deaths in last 3 months")
-        elif d3 > 0: prob += 0.15; factors.append(f"{d3} death(s) in last 3 months")
-        if lt["slope_6m"] > 50: prob += 0.15; factors.append(f"Rapidly rising trend: {lt['slope_6m']:+.1f}/mo")
-        elif lt["slope_6m"] > 20: prob += 0.08; factors.append(f"Rising trend: {lt['slope_6m']:+.1f}/mo")
-        if failure_modes and isinstance(failure_modes, dict) and failure_modes.get("status") == "ok":
-            modes = failure_modes.get("modes", {})
-            if "alarm" in modes and modes["alarm"]["pct"] > 10: prob += 0.10; factors.append(f"Alarm failures at {modes['alarm']['pct']}%")
-            if "hyperglycemia" in modes and modes["hyperglycemia"]["pct"] > 15: prob += 0.10; factors.append(f"Hyperglycemia events at {modes['hyperglycemia']['pct']}%")
-        prob = min(0.95, prob); signal = "HIGH" if prob > 0.5 else "MODERATE" if prob > 0.25 else "LOW"
-        msg = f"Estimated {prob*100:.0f}% probability of Class I/II recall within 6 months. "
-        if factors: msg += "Factors: " + "; ".join(factors[:3]) + "."
-        return {"status":"ok","probability":prob,"signal":signal,"message":msg,"factors":factors}
-    except Exception as e: return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# MODULE 11: Peer-Relative
-# ============================================================
-def compute_peer_relative(company_r_scores):
-    if not company_r_scores or len(company_r_scores) < 2: return {}
-    scores = list(company_r_scores.values()); avg = sum(scores) / len(scores); result = {}
-    sorted_tickers = sorted(company_r_scores.keys(), key=lambda t: company_r_scores[t])
-    for i, tk in enumerate(sorted_tickers):
-        sc = company_r_scores[tk]; rank = i + 1; total = len(sorted_tickers)
-        if rank == total: signal = "WORST"
-        elif rank >= total - 1: signal = "WEAK"
-        elif rank == 1: signal = "BEST"
-        elif rank <= 2: signal = "STRONG"
-        else: signal = "MIDDLE"
-        msg = f"R-Score {sc:.0f} vs peer avg {avg:.0f}. Rank {rank}/{total}."
-        result[tk] = {"signal":signal,"message":msg,"rank":rank,"total":total,"peer_avg":round(avg,1),"r_score":sc}
-    return result
-
-# ============================================================
-# MODULE 12: Earnings Predictor
-# ============================================================
-def predict_earnings_surprise(stats, r_score, peer_relative):
-    try:
-        if not stats or len(stats) < 6 or not r_score: return {"status":"insufficient_data","message":"Need 6+ months of stats and R-Score."}
-        score = 50; factors = []
-        if r_score["total"] >= 70: score -= 25; factors.append(f"R-Score CRITICAL ({r_score['total']:.0f})")
-        elif r_score["total"] >= 50: score -= 15; factors.append(f"R-Score ELEVATED ({r_score['total']:.0f})")
-        elif r_score["total"] < 25: score += 10; factors.append(f"R-Score low/clean ({r_score['total']:.0f})")
-        recent_rates = [s["rate_per_m"] for s in stats[-3:] if s["rate_per_m"]]
-        prior_rates = [s["rate_per_m"] for s in stats[-6:-3] if s["rate_per_m"]]
-        if recent_rates and prior_rates:
-            r_avg = sum(recent_rates)/len(recent_rates); p_avg = sum(prior_rates)/len(prior_rates)
-            if p_avg > 0:
-                change = (r_avg/p_avg - 1)*100
-                if change > 20: score -= 15; factors.append(f"Rate/$M rising {change:.0f}%")
-                elif change < -15: score += 10; factors.append(f"Rate/$M declining {change:.0f}%")
-        if peer_relative and isinstance(peer_relative, dict):
-            if peer_relative.get("signal") == "WORST": score -= 10; factors.append("Worst peer position")
-            elif peer_relative.get("signal") == "BEST": score += 10; factors.append("Best peer position")
-        prediction = "LIKELY MISS" if score < 35 else "LIKELY BEAT" if score > 65 else "NEUTRAL"
-        confidence = abs(score - 50) * 2
-        msg = f"Earnings prediction: {prediction} ({confidence:.0f}% confidence). "
-        if factors: msg += "Key factors: " + ", ".join(factors) + "."
-        return {"status":"ok","prediction":prediction,"score":score,"confidence":round(confidence,1),"message":msg,"factors":factors}
-    except Exception as e: return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# MODULE 13: R-Score Backtest
-# ============================================================
-def backtest_r_score(stats, stock_prices, threshold=50):
-    try:
-        if not stats or len(stats) < 12 or not stock_prices: return {"status":"insufficient_data","message":"Need 12+ months of stats and stock prices."}
-        signals = []
-        for i in range(11, len(stats)):
-            rs = compute_r_score(stats[:i+1])
-            if rs and rs["total"] >= threshold: signals.append({"month":stats[i]["month"],"r_score":rs["total"]})
-        if not signals: return {"status":"ok","message":f"R-Score never crossed {threshold}. No backtest signals.","results":{}}
-        results = {}
-        for window_name, months_forward in [("30d",1),("60d",2),("90d",3)]:
-            returns = []
-            for sig in signals:
-                sm = sig["month"]
-                if sm not in stock_prices: continue
-                pa = stock_prices[sm]; y,m = int(sm[:4]),int(sm[5:7]); m += months_forward
-                if m > 12: m -= 12; y += 1
-                future = f"{y}-{m:02d}"
-                if future not in stock_prices: continue
-                pf = stock_prices[future]; returns.append((pf - pa) / pa * 100)
-            if returns: results[window_name] = {"avg_return":round(sum(returns)/len(returns),2),"win_rate":round(sum(1 for r in returns if r<0)/len(returns)*100,1),"n":len(returns)}
-        msg = f"Found {len(signals)} historical R-Score signals above {threshold}. "
-        if "60d" in results: msg += f"Avg 60d stock return after signal: {results['60d']['avg_return']:+.1f}%."
-        return {"status":"ok","results":results,"message":msg,"signal_count":len(signals)}
-    except Exception as e: return {"status":"error","message":str(e)[:200]}
-
-# ============================================================
-# V3.2: BATCH SMOOTHING ENGINE
-# ============================================================
-def smooth_batch_data(recv, evnt):
-    if not recv or len(recv) < 4:
-        return {"smoothed":dict(recv) if recv else {},"method":"none","window":0,"raw":dict(recv) if recv else {},"fit_corr":0.0}
-    months = sorted(set(list(recv.keys()) + list((evnt or {}).keys())))
-    r = [recv.get(m, 0) for m in months]; e = [(evnt or {}).get(m, 0) for m in months]
-    def _corr(a, b):
-        n = min(len(a), len(b))
-        if n < 3: return 0.0
-        ma, mb = sum(a[:n])/n, sum(b[:n])/n
-        num = sum((a[i]-ma)*(b[i]-mb) for i in range(n))
-        da = sum((a[i]-ma)**2 for i in range(n))**0.5; db = sum((b[i]-mb)**2 for i in range(n))**0.5
-        return num/(da*db) if da*db > 0 else 0.0
-    base_corr = _corr(r, e); best = {"c":base_corr,"m":"raw","w":0,"d":{m:recv.get(m,0) for m in months}}
-    for w in [3, 4, 5]:
-        sma = []
-        for i in range(len(r)):
-            s = max(0, i-w+1); sma.append(sum(r[s:i+1])/(i-s+1))
-        c = _corr(sma, e)
-        if c > best["c"]: best = {"c":c,"m":"SMA","w":w,"d":{months[i]:round(sma[i]) for i in range(len(months))}}
-        alpha = 2.0/(w+1); ew = [float(r[0])]
-        for i in range(1, len(r)): ew.append(alpha*r[i] + (1.0-alpha)*ew[-1])
-        c = _corr(ew, e)
-        if c > best["c"]: best = {"c":c,"m":"EWMA","w":w,"d":{months[i]:round(ew[i]) for i in range(len(months))}}
-    return {"smoothed":best["d"],"method":best["m"],"window":best["w"],"raw":recv,"fit_corr":round(best["c"],3)}
-
-# ============================================================
-# V3.2: CASE STUDY EVENTS + HELPERS
-# ============================================================
-CASE_STUDY_EVENTS = {
-    "PRCT":[{"date":"2021-09","type":"IPO","desc":"IPO at ~$25/share"},{"date":"2022-05","type":"RECALL","desc":"Class 2 Recall - AquaBeam system"},{"date":"2024-12","type":"PEAK","desc":"Stock peaks ~$100"},{"date":"2025-10","type":"RECALL","desc":"Class 2 Recall - AquaBeam Handpiece"},{"date":"2026-01","type":"LEGAL","desc":"Securities fraud investigations launched"}],
-    "INSP":[{"date":"2023-07","type":"PEAK","desc":"Stock peaks ~$326 (ATH)"},{"date":"2024-06","type":"RECALL","desc":"Class I Recall - Inspire IV IPG 3028"},{"date":"2024-07","type":"FDA","desc":"FDA labels recall most serious type"},{"date":"2025-08","type":"CRASH","desc":"Inspire V launch failure, -$42 drop"},{"date":"2025-12","type":"LEGAL","desc":"Securities fraud lawsuit filed"}],
-    "CVRX":[{"date":"2024-01","type":"MGMT","desc":"CEO Yared retires, Hykes appointed"},{"date":"2024-10","type":"REIMB","desc":"MS-DRG 276 reassignment (~$43K)"},{"date":"2025-02","type":"DATA","desc":"Real-world evidence at THT 2025"},{"date":"2025-05","type":"EARN","desc":"Q1 2025: revenue miss"},{"date":"2026-01","type":"REIMB","desc":"Category I CPT codes effective"}],
-}
-CASE_STUDY_TICKER_MAP = {"PRCT_AQUABEAM":"PRCT","INSP_INSPIRE":"INSP","CVRX_BAROSTIM":"CVRX"}
-
-def get_monthly_stock(ticker, start="20200101"):
-    try:
-        import yfinance as yf
-        tk = ticker.split("_")[0]; start_str = f"{start[:4]}-{start[4:6]}-{start[6:8]}"
-        df = yf.download(tk, start=start_str, interval="1mo", progress=False)
-        if df.empty: return {}
-        result = {}
-        for idx, row in df.iterrows():
-            ym = idx.strftime("%Y-%m"); cv = row["Close"]
-            if hasattr(cv,'iloc'): cv = cv.iloc[0]
-            result[ym] = round(float(cv), 2)
-        return result
-    except Exception as ex:
-        print(f"  [WARN] get_monthly_stock({ticker}): {ex}"); return {}
-
-def compute_case_study(ticker, recv, stock_data, events=None):
-    if not recv or not stock_data: return None
-    common = sorted(set(recv.keys()) & set(stock_data.keys()))
-    if len(common) < 6: return None
-    rv = [recv.get(m,0) for m in common]; sv = [stock_data.get(m,0) for m in common]
-    sr = [0.0]+[(sv[i]-sv[i-1])/sv[i-1] if sv[i-1]>0 else 0.0 for i in range(1,len(sv))]
-    mc = [0.0]+[(rv[i]-rv[i-1])/rv[i-1] if rv[i-1]>0 else 0.0 for i in range(1,len(rv))]
-    def _corr(a,b):
-        n=min(len(a),len(b))
-        if n<3: return 0.0
-        ma,mb=sum(a[:n])/n,sum(b[:n])/n; num=sum((a[i]-ma)*(b[i]-mb) for i in range(n))
-        da=sum((a[i]-ma)**2 for i in range(n))**0.5; db=sum((b[i]-mb)**2 for i in range(n))**0.5
-        return num/(da*db) if da*db>0 else 0.0
-    lags = []
-    for lag in range(7):
-        if lag >= len(common)-3: break
-        ms = mc[:len(mc)-lag] if lag>0 else mc; ss = sr[lag:] if lag>0 else sr
-        n = min(len(ms),len(ss)); c = _corr(ms[:n],ss[:n]); lags.append({"lag":lag,"corr":round(c,3)})
-    opt = min(lags, key=lambda x:x["corr"]) if lags else {"lag":0,"corr":0.0}
-    mean_r = sum(rv)/len(rv) if rv else 0; std_r = (sum((v-mean_r)**2 for v in rv)/len(rv))**0.5 if len(rv)>1 else 0
-    signals = []
-    for i,m in enumerate(common):
-        if std_r > 0:
-            z = (rv[i]-mean_r)/std_r
-            if z > 1.5:
-                future_return = None; fi = i + opt["lag"]; end_i = min(fi+3, len(sv)-1)
-                if fi < len(sv) and end_i < len(sv) and sv[fi] > 0: future_return = round((sv[end_i]-sv[fi])/sv[fi]*100, 1)
-                signals.append({"month":m,"z":round(z,2),"count":rv[i],"stock_at_signal":sv[i] if i<len(sv) else None,"future_return_pct":future_return})
-    hits = sum(1 for s in signals if s.get("future_return_pct") is not None and s["future_return_pct"]<0)
-    hit_rate = round(hits/len(signals)*100,1) if signals else 0.0
-    max_maude = max(rv) if rv else 0; max_month = common[rv.index(max_maude)] if rv and max_maude>0 else "N/A"
-    return {"ticker":ticker,"months":common,"maude":rv,"stock":sv,"returns":[round(x,4) for x in sr],"maude_changes":[round(x,4) for x in mc],
-        "lags":lags,"optimal_lag":opt,"signals":signals,"hit_rate":hit_rate,"events":events or [],
-        "summary":{"total_months":len(common),"max_maude":max_maude,"max_maude_month":max_month,
-                    "stock_start":sv[0] if sv else 0,"stock_end":sv[-1] if sv else 0,
-                    "stock_change_pct":round((sv[-1]-sv[0])/sv[0]*100,1) if sv and sv[0]>0 else 0}}
-
-def generate_case_studies_html(all_res):
-    cs_results = {}
-    for did,R in all_res.items():
-        cs = R.get("case_study")
-        if cs: cs_results[cs["ticker"]] = (cs, did, R)
-    if not cs_results:
-        return '<div id="tc-casestudies" class="tabcontent"><h2>Case Studies</h2><p style="color:var(--tx2)">No case study data. Ensure yfinance is installed.</p></div>', "{}", ""
-    h = '<div id="tc-casestudies" class="tabcontent">\n<h2>Case Studies: MAUDE Signal &#8594; Stock Price</h2>\n'
-    h += '<p class="cs-intro">These case studies examine historical instances where rising MAUDE adverse event reports preceded significant stock price movements. A negative correlation at lag N means a MAUDE spike in month T predicted a stock decline around month T+N.</p>\n'
-    for tk,(cs,did,R) in cs_results.items():
-        opt = cs["optimal_lag"]; sig_class = "signal-negative" if opt["corr"]<-0.1 else "signal-positive"; sc = cs["summary"]["stock_change_pct"]
-        h += f'<div class="cs-card {sig_class}">\n<div class="cs-header"><h3>{tk} &mdash; {R["device"]["name"]} ({R["device"]["company"]})</h3>\n'
-        h += f'<span class="cs-lag-badge">Optimal Lead: {opt["lag"]}mo (r={opt["corr"]})</span></div>\n'
-        h += f'<div class="cs-chart-wrap"><canvas id="cs-ch-{tk}"></canvas></div>\n<div class="cs-metrics">\n'
-        h += f'<div class="cs-metric"><span class="lbl">Period</span><span class="val">{cs["summary"]["total_months"]}mo</span></div>\n'
-        h += f'<div class="cs-metric"><span class="lbl">Optimal Lag</span><span class="val">{opt["lag"]}mo</span></div>\n'
-        vc = "neg" if opt["corr"]<0 else "pos"
-        h += f'<div class="cs-metric"><span class="lbl">Lag Correlation</span><span class="val {vc}">{opt["corr"]}</span></div>\n'
-        h += f'<div class="cs-metric"><span class="lbl">Hit Rate</span><span class="val">{cs["hit_rate"]}%</span></div>\n'
-        hc = "neg" if sc<0 else "pos"
-        h += f'<div class="cs-metric"><span class="lbl">Stock Change</span><span class="val {hc}">{sc:+.1f}%</span></div>\n'
-        h += f'<div class="cs-metric"><span class="lbl">Peak MAUDE</span><span class="val">{cs["summary"]["max_maude_month"]}<br>({cs["summary"]["max_maude"]})</span></div>\n</div>\n'
-        h += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600;color:var(--g);font-size:13px">&#9660; Lead-Lag Correlation Table</summary>\n<table class="cs-lag-table"><tr><th>MAUDE Leads By</th>'
-        for lg in cs["lags"]: h += f'<th>{lg["lag"]}mo</th>'
-        h += '</tr><tr><td><strong>Correlation</strong></td>'
-        for lg in cs["lags"]:
-            cls = ' class="best"' if lg["lag"]==opt["lag"] else ""; h += f'<td{cls}>{lg["corr"]:+.3f}</td>'
-        h += '</tr></table></details>\n'
-        if cs["signals"]:
-            h += f'<details style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600;color:var(--g);font-size:13px">&#9660; Signal Events (Z &gt; 1.5)</summary>\n<table class="cs-sig-table"><tr><th>Month</th><th>Count</th><th>Z</th><th>Stock</th><th>Return ({opt["lag"]+3}mo)</th></tr>\n'
-            for sig in cs["signals"]:
-                fr = sig.get("future_return_pct"); fs = f'{fr:+.1f}%' if fr is not None else "N/A"
-                fc = "neg" if fr is not None and fr<0 else ("pos" if fr is not None and fr>0 else "")
-                sp = f'${sig["stock_at_signal"]:.2f}' if sig.get("stock_at_signal") else "N/A"
-                h += f'<tr><td>{sig["month"]}</td><td>{sig["count"]}</td><td>{sig["z"]:.1f}</td><td>{sp}</td><td class="{fc}">{fs}</td></tr>\n'
-            h += '</table></details>\n'
-        if cs["events"]:
-            h += '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;color:var(--g);font-size:13px">&#9660; Key Events</summary><div style="padding:8px 0">'
-            for evt in cs["events"]:
-                ec = {"RECALL":"var(--red)","CRASH":"var(--red)","LEGAL":"var(--red)","PEAK":"var(--org)","FDA":"var(--org)","IPO":"var(--g)","REIMB":"var(--g)","DATA":"var(--g)","MGMT":"#666","EARN":"#666"}.get(evt["type"],"var(--tx2)")
-                h += f'<div style="margin:4px 0;font-size:12px"><span style="color:{ec};font-weight:700">{evt["date"]}</span> <span style="background:{ec};color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600">{evt["type"]}</span> {evt["desc"]}</div>\n'
-            h += '</div></details>\n'
-        h += '<div class="cs-thesis">'
-        if opt["corr"]<-0.15 and cs["hit_rate"]>50: h += f'<strong>&#9989; THESIS CONFIRMED:</strong> MAUDE spikes led stock declines by ~{opt["lag"]} months with {cs["hit_rate"]}% hit rate (r={opt["corr"]}). Tradeable early warning window for {tk}.'
-        elif opt["corr"]<-0.1: h += f'<strong>&#9888; PARTIALLY SUPPORTED:</strong> Weak negative correlation ({opt["corr"]}) at {opt["lag"]}mo lag, {cs["hit_rate"]}% hit rate.'
-        else: h += f'<strong>&#10060; NOT SUPPORTED (standard model):</strong> Correlation {opt["corr"]} at {opt["lag"]}mo lag. {tk} may need event-driven analysis.'
-        h += '</div>\n</div>\n'
-    h += '</div>\n'
-    jsd = {}
-    for tk,(cs,did,R) in cs_results.items():
-        jsd[tk] = {"months":cs["months"],"maude":cs["maude"],"stock":cs["stock"],"events":cs["events"],"optimal_lag":cs["optimal_lag"],"hit_rate":cs["hit_rate"]}
-    jsi = '''
-function initCaseStudies(){
-if(!window.cs_data)return;
-for(var tk in cs_data){
-var cs=cs_data[tk];
-var ctx=document.getElementById("cs-ch-"+tk);
-if(!ctx)continue;
-var barC=cs.months.map(function(m,i){return "rgba(192,57,43,0.25)";});
-new Chart(ctx,{
-type:"bar",
-data:{labels:cs.months,datasets:[
-{label:"MAUDE Reports",data:cs.maude,backgroundColor:barC,borderColor:"rgba(192,57,43,0.7)",borderWidth:1,yAxisID:"y",order:2},
-{label:"Stock ($)",data:cs.stock,type:"line",borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:1.5,tension:0.2,yAxisID:"y1",order:1}
-]},
-options:{
-responsive:true,
-maintainAspectRatio:false,
-interaction:{mode:"index",intersect:false},
-scales:{
-x:{ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},
-y:{position:"left",ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE Reports",color:"#c0392b",font:{size:11}}},
-y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}}
-},
-plugins:{
-legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},
-zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},mode:"x"}}
-}
-}
-});
-}
-}
-'''
-    return h, json.dumps(jsd), jsi
-
-# ============================================================
-# LIVE DATA: Stock Prices via yfinance
-# ============================================================
-TICKER_TO_YAHOO = {"DXCM":"DXCM","PODD":"PODD","TNDM":"TNDM","ABT_LIBRE":"ABT","BBNX":"BBNX","MDT_DM":"MDT"}
 def fetch_live_stock_prices():
     try:
         import yfinance as yf
     except ImportError:
-        print("  yfinance not installed — using hardcoded stock prices."); return {}
-    live = {}
-    for our_tk, yahoo_tk in TICKER_TO_YAHOO.items():
+        print("  yfinance not installed — using hardcoded stock data")
+        return {}
+    tickers = list(set(d["ticker"] for d in DEVICES if d["ticker"] not in ("SQEL",)))
+    result = {}
+    for tk in tickers:
         try:
-            print(f"  Fetching {yahoo_tk} live stock data...")
-            tkr = yf.Ticker(yahoo_tk); hist = tkr.history(period="3y", interval="1mo")
-            if hist.empty: continue
-            prices = {}
-            for dt, row in hist.iterrows(): ym = dt.strftime("%Y-%m"); prices[ym] = round(float(row["Close"]), 2)
-            if prices: live[our_tk] = prices; print(f"    Got {len(prices)} months for {yahoo_tk}")
-        except Exception as e: print(f"  Warning: {yahoo_tk} fetch failed: {e}")
-    return live
+            data = yf.download(tk, period="3y", interval="1mo", progress=False)
+            if data is not None and len(data) > 0:
+                monthly = {}
+                for idx, row in data.iterrows():
+                    m = idx.strftime("%Y-%m")
+                    close_val = row.get("Close") if "Close" in data.columns else row.iloc[3]
+                    if hasattr(close_val,'item'): close_val = close_val.item()
+                    monthly[m] = round(float(close_val), 2)
+                result[tk] = monthly
+                print(f"    {tk}: {len(monthly)} months of live data")
+        except Exception as e:
+            print(f"    {tk}: yfinance error — {str(e)[:80]}")
+    return result
 
 def merge_stock_data(hardcoded, live):
     merged = {}
     for tk in set(list(hardcoded.keys()) + list(live.keys())):
-        merged[tk] = {}
-        if tk in hardcoded: merged[tk].update(hardcoded[tk])
-        if tk in live: merged[tk].update(live[tk])
+        merged[tk] = dict(hardcoded.get(tk, {}))
+        if tk in live:
+            merged[tk].update(live[tk])
     return merged
 
-# ============================================================
-# LIVE DATA: FDA Recalls
-# ============================================================
-def fetch_fda_recalls(search_query, limit=5):
-    try:
-        url = f"https://api.fda.gov/device/recall.json?search={_q(search_query)}&limit={limit}&sort=event_date_posted:desc"
-        d = api_get(url)
-        if not d or "results" not in d: return {"status":"no_data","message":"No recalls found.","recalls":[]}
-        recalls = []
-        for r in d["results"][:limit]:
-            recalls.append({"event_id":r.get("res_event_number",""),"classification":r.get("event_classification","Unknown"),"date_posted":(r.get("event_date_posted","") or "")[:10],"reason":(r.get("reason_for_recall","N/A"))[:250],"product":(r.get("product_description",""))[:200],"status":r.get("status",""),"firm":r.get("recalling_firm","")})
-        return {"status":"ok","recalls":recalls,"total":len(recalls),"message":f"{len(recalls)} recalls found."}
-    except Exception as e: return {"status":"error","message":str(e)[:200],"recalls":[]}
-
-# ============================================================
-# ENHANCED: Insider Trading with Form 4 XML parsing
-# ============================================================
-def analyze_insider_trading_detailed(ticker):
-    cik = TICKER_TO_CIK.get(ticker)
-    if not cik: return {"status":"no_cik","message":f"No CIK for {ticker}."}
-    try:
-        url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"; d = api_get(url)
-        if not d or "filings" not in d: return analyze_insider_trading(ticker)
-        recent = d["filings"].get("recent", {}); forms = recent.get("form", []); dates = recent.get("filingDate", []); accessions = recent.get("accessionNumber", []); primary_docs = recent.get("primaryDocument", [])
-        cutoff = (datetime.now() - __import__('datetime').timedelta(days=90)).strftime("%Y-%m-%d")
-        buys, sells, other = 0, 0, 0; total_buy_value, total_sell_value = 0.0, 0.0; transactions = []
-        for i, f in enumerate(forms):
-            if f not in ("4", "4/A"): continue
-            if i >= len(dates) or dates[i] < cutoff: continue
-            if i >= len(accessions) or i >= len(primary_docs): continue
-            acc_clean = accessions[i].replace("-", ""); doc = primary_docs[i]
-            form4_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_clean}/{doc}"
-            try:
-                req = Request(form4_url, headers={"User-Agent": "MAUDE/3.2 research@example.com"})
-                with urlopen(req, timeout=15) as resp: xml_text = resp.read().decode("utf-8", errors="ignore")
-                codes = _re.findall(r'<transactionCode>(\w)</transactionCode>', xml_text)
-                shares_list = _re.findall(r'<transactionShares>.*?<value>([\d.]+)</value>', xml_text, _re.DOTALL)
-                prices_list = _re.findall(r'<transactionPricePerShare>.*?<value>([\d.]+)</value>', xml_text, _re.DOTALL)
-                owner = _re.findall(r'<rptOwnerName>(.*?)</rptOwnerName>', xml_text)
-                owner_name = owner[0] if owner else "Unknown"; txn_type = "OTHER"; txn_shares = 0; txn_value = 0.0
-                for ci, code in enumerate(codes):
-                    sh = float(shares_list[ci]) if ci < len(shares_list) else 0; pr = float(prices_list[ci]) if ci < len(prices_list) else 0; val = sh * pr
-                    if code == "P": buys += 1; total_buy_value += val; txn_type = "BUY"
-                    elif code == "S": sells += 1; total_sell_value += val; txn_type = "SELL"
-                    else: other += 1; txn_type = code
-                    txn_shares += sh; txn_value += val
-                transactions.append({"date":dates[i],"owner":owner_name,"type":txn_type,"shares":round(txn_shares),"value":round(txn_value)})
-                time.sleep(0.3)
-            except Exception: other += 1; transactions.append({"date":dates[i],"owner":"Unknown","type":"UNKNOWN","shares":0,"value":0})
-            if len(transactions) >= 15: break
-        total = buys + sells + other
-        if total == 0: return {"status":"no_signals","message":"No Form 4 insider transactions in the last 90 days."}
-        net_direction = "NET SELLER" if sells > buys else "NET BUYER" if buys > sells else "MIXED"
-        if sells > buys * 2 and total_sell_value > 500000: signal = "bearish"
-        elif buys > sells * 2 and total_buy_value > 100000: signal = "bullish"
-        elif sells > buys: signal = "moderate_sell"
-        elif buys > sells: signal = "moderate_buy"
-        else: signal = "neutral"
-        msg = f"{total} Form 4 filings in 90 days: {buys} buys (${total_buy_value:,.0f}), {sells} sells (${total_sell_value:,.0f}), {other} other. Insiders are {net_direction}. "
-        if signal == "bearish": msg += "BEARISH: Heavy insider selling."
-        elif signal == "bullish": msg += "BULLISH: Insider buying suggests management confidence."
-        elif signal == "moderate_sell": msg += "Leaning sell-side."
-        elif signal == "moderate_buy": msg += "Leaning buy-side."
-        else: msg += "No clear directional signal."
-        return {"status":"ok","message":msg,"form4_count":total,"buys":buys,"sells":sells,"other":other,"total_buy_value":round(total_buy_value),"total_sell_value":round(total_sell_value),"signal":signal,"net_direction":net_direction,"transactions":transactions[:10],"latest_date":transactions[0]["date"] if transactions else None}
-    except Exception as e: return analyze_insider_trading(ticker)
-
-# ============================================================
-# REVENUE STALENESS TRACKER
-# ============================================================
-REVENUE_LAST_UPDATED = "2026-03-23"
 def get_revenue_staleness():
     try:
-        last = datetime.strptime(REVENUE_LAST_UPDATED, "%Y-%m-%d"); days = (datetime.now() - last).days
-        if days > 120: return {"status":"STALE","days":days,"message":f"Revenue data is {days} days old. Update after latest earnings calls."}
-        elif days > 60: return {"status":"AGING","days":days,"message":f"Revenue data is {days} days old. Check for recent earnings."}
-        else: return {"status":"CURRENT","days":days,"message":f"Revenue data updated {days} days ago."}
-    except: return {"status":"UNKNOWN","days":999,"message":"Could not determine revenue data age."}
+        lu = datetime.strptime(REVENUE_LAST_UPDATED, "%Y-%m-%d")
+        days = (datetime.now() - lu).days
+        if days > 120: return {"stale": True, "days": days, "message": f"STALE ({days} days old) — update after earnings"}
+        elif days > 90: return {"stale": False, "days": days, "message": f"Due for update ({days} days)"}
+        else: return {"stale": False, "days": days, "message": f"Current ({days} days old)"}
+    except: return {"stale": True, "days": 999, "message": "Unknown staleness"}
 
 # ============================================================
+# OPENFDA DATA FETCHING
+# ============================================================
+def _api_get(url, retries=3):
+    for attempt in range(retries):
+        try:
+            req = Request(url, headers={"User-Agent":"MAUDE-Monitor/3.2"})
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except (HTTPError, URLError, Exception) as e:
+            if attempt < retries-1: time.sleep(2*(attempt+1))
+            else: print(f"  API error: {str(e)[:100]}"); return None
+
+def fetch_counts(search_query, date_field, start_date):
+    url = (f"https://api.fda.gov/device/event.json?"
+           f"search=brand_name:{url_quote(search_query)}+AND+"
+           f"{date_field}:[{start_date}+TO+now]"
+           f"&count={date_field}")
+    data = _api_get(url)
+    if not data or "results" not in data: return {}
+    counts = {}
+    for r in data["results"]:
+        d = r.get("time","")
+        if len(d) >= 6:
+            m = f"{d[:4]}-{d[4:6]}"
+            counts[m] = counts.get(m, 0) + r.get("count", 0)
+    return counts
+
+def fetch_severity(search_query, start_date):
+    sev = {"death":{},"injury":{},"malfunction":{}}
+    for etype in sev:
+        url = (f"https://api.fda.gov/device/event.json?"
+               f"search=brand_name:{url_quote(search_query)}+AND+"
+               f"event_type:{etype}+AND+date_received:[{start_date}+TO+now]"
+               f"&count=date_received")
+        data = _api_get(url)
+        if data and "results" in data:
+            for r in data["results"]:
+                d = r.get("time","")
+                if len(d)>=6:
+                    m=f"{d[:4]}-{d[4:6]}"
+                    sev[etype][m] = sev[etype].get(m,0) + r.get("count",0)
+        time.sleep(0.3)
+    return sev
+
+# ============================================================
+# STATISTICS & SCORING
+# ============================================================
+def compute_stats(recv_counts, sev_data, ticker):
+    if not recv_counts: return None
+    months = sorted(recv_counts.keys())
+    vals = [recv_counts[m] for m in months]
+    n = len(vals)
+    if n < 3: return None
+    mean_val = sum(vals)/n
+    std_val = math.sqrt(sum((v-mean_val)**2 for v in vals)/n) if n > 1 else 1
+    if std_val == 0: std_val = 1
+    latest_m = months[-1]
+    latest_v = vals[-1]
+    z_score = (latest_v - mean_val)/std_val
+    # 6-month trend (linear regression slope)
+    recent = vals[-6:] if n >= 6 else vals
+    nr = len(recent)
+    if nr >= 3:
+        x_mean = (nr-1)/2.0
+        y_mean = sum(recent)/nr
+        num = sum((i-x_mean)*(recent[i]-y_mean) for i in range(nr))
+        den = sum((i-x_mean)**2 for i in range(nr))
+        slope = num/den if den > 0 else 0
+    else: slope = 0
+    # Severity counts (last 3 months)
+    last3 = months[-3:] if n >= 3 else months
+    deaths_3mo = sum(sev_data.get("death",{}).get(m,0) for m in last3)
+    injuries_3mo = sum(sev_data.get("injury",{}).get(m,0) for m in last3)
+    malfunctions_3mo = sum(sev_data.get("malfunction",{}).get(m,0) for m in last3)
+    # Rate per $M revenue
+    rev_key_map = {d["ticker"]: d["rev_key"] for d in DEVICES}
+    rk = rev_key_map.get(ticker, ticker)
+    yr, mo = latest_m.split("-")
+    q = f"{yr}-Q{(int(mo)-1)//3+1}"
+    qrev = QUARTERLY_REVENUE.get(rk, {}).get(q)
+    rate_per_m = latest_v / (qrev/3) * 1e6 if qrev and qrev > 0 else None
+    # Rate per 10K users
+    ib = INSTALLED_BASE_K.get(rk, {}).get(q)
+    rate_per_10k = latest_v / ib * 10000 if ib and ib > 0 else None
+    # Sigma bands
+    sigma1_lo = max(0, mean_val - std_val)
+    sigma1_hi = mean_val + std_val
+    sigma2_lo = max(0, mean_val - 2*std_val)
+    sigma2_hi = mean_val + 2*std_val
+    # Moving average
+    ma6 = {}
+    for i, m in enumerate(months):
+        window = vals[max(0,i-5):i+1]
+        ma6[m] = sum(window)/len(window)
+    return {
+        "months": months, "values": vals, "mean": mean_val, "std": std_val,
+        "z_score": z_score, "latest_month": latest_m, "latest_value": latest_v,
+        "slope_6mo": slope, "deaths_3mo": deaths_3mo, "injuries_3mo": injuries_3mo,
+        "malfunctions_3mo": malfunctions_3mo, "rate_per_m": rate_per_m,
+        "rate_per_10k": rate_per_10k, "sigma1_lo": sigma1_lo, "sigma1_hi": sigma1_hi,
+        "sigma2_lo": sigma2_lo, "sigma2_hi": sigma2_hi, "ma6": ma6,
+    }
+
+def compute_r_score(stats):
+    if not stats: return None
+    s = 0
+    z = abs(stats["z_score"])
+    if z >= 3: s += 20
+    elif z >= 2: s += 15
+    elif z >= 1.5: s += 10
+    elif z >= 1: s += 5
+    sl = stats["slope_6mo"]
+    if sl > 100: s += 20
+    elif sl > 50: s += 15
+    elif sl > 20: s += 10
+    elif sl > 0: s += 5
+    d = stats["deaths_3mo"]
+    if d >= 5: s += 20
+    elif d >= 2: s += 15
+    elif d >= 1: s += 10
+    inj = stats["injuries_3mo"]
+    if inj >= 50: s += 20
+    elif inj >= 20: s += 15
+    elif inj >= 5: s += 10
+    elif inj >= 1: s += 5
+    rpm = stats.get("rate_per_m")
+    if rpm:
+        if rpm > 500: s += 20
+        elif rpm > 200: s += 15
+        elif rpm > 100: s += 10
+        elif rpm > 50: s += 5
+    return min(100, s)
+
+# ============================================================
+# BATCH DETECTION — RECALL-AWARE
+# ============================================================
+def detect_batch(recv_counts, event_counts, ticker=None):
+    batch = {}
+    for m in recv_counts:
+        rc = recv_counts.get(m, 0)
+        ec = event_counts.get(m, 0)
+        if ec > 0 and rc > 3 * ec:
+            batch[m] = "batch"
+        else:
+            batch[m] = None
+    if ticker:
+        base_ticker = ticker.split("_")[0] if "_" in ticker else ticker
+        windows = RECALL_BATCH_WINDOWS.get(base_ticker, [])
+        if windows:
+            sorted_months = sorted(recv_counts.keys())
+            first_recall_start = min(w[0] for w in windows)
+            pre_recall_months = [m for m in sorted_months if m < first_recall_start]
+            if len(pre_recall_months) >= 6:
+                baseline_vals = sorted([recv_counts[m] for m in pre_recall_months[-6:]])
+                baseline_median = baseline_vals[len(baseline_vals)//2]
+            elif pre_recall_months:
+                baseline_vals = [recv_counts[m] for m in pre_recall_months]
+                baseline_median = sum(baseline_vals)/len(baseline_vals)
+            else:
+                baseline_median = None
+            for win_start, win_end, desc in windows:
+                for m in sorted_months:
+                    if win_start <= m <= win_end:
+                        rc = recv_counts.get(m, 0)
+                        if baseline_median and rc > baseline_median * 1.5:
+                            if batch.get(m) is None:
+                                batch[m] = {"type":"recall_batch","recall_desc":desc,
+                                            "organic_est":round(baseline_median),"excess":round(rc-baseline_median)}
+    return batch
+
+def get_organic_counts(recv_counts, batch_info):
+    organic = {}
+    for m, rc in recv_counts.items():
+        bi = batch_info.get(m)
+        if isinstance(bi, dict) and "organic_est" in bi:
+            organic[m] = bi["organic_est"]
+        elif bi == "batch":
+            organic[m] = max(1, rc // 2)
+        else:
+            organic[m] = rc
+    return organic
+
+# ============================================================
+# MODULE 1: ENHANCED MULTI-SIGNAL CORRELATION
+# ============================================================
+def compute_enhanced_correlation(recv_counts, stock_prices, max_lag=6,
+                                 revenue_dict=None, installed_base_dict=None):
+    try:
+        if not recv_counts or not stock_prices:
+            return {"status":"insufficient_data","message":"Missing MAUDE or stock data.",
+                    "best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,
+                    "direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
+        common = sorted(set(recv_counts.keys()) & set(stock_prices.keys()))
+        if len(common) < 14:
+            return {"status":"insufficient_data","message":f"Only {len(common)} overlapping months. Need 14+.",
+                    "best_rho":0,"best_p":1.0,"best_lag":0,"significant":False,
+                    "direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
+        mc = [recv_counts[m] for m in common]
+        sp = [stock_prices[m] for m in common]
+        sr = [0.0]+[(sp[i]-sp[i-1])/sp[i-1]*100 if sp[i-1]>0 else 0.0 for i in range(1,len(sp))]
+        signals = {}
+        signals["raw_counts"] = mc
+        deltas = [0.0]+[mc[i]-mc[i-1] for i in range(1,len(mc))]
+        signals["count_delta"] = deltas
+        z_scores = []
+        for i in range(len(mc)):
+            window = mc[max(0,i-5):i+1]
+            if len(window)>=3:
+                mu=sum(window)/len(window); sd=math.sqrt(sum((v-mu)**2 for v in window)/len(window))
+                z_scores.append((mc[i]-mu)/sd if sd>0 else 0.0)
+            else: z_scores.append(0.0)
+        signals["z_score"] = z_scores
+        if revenue_dict:
+            rate_rev = []
+            for m in common:
+                yr,mo = m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"
+                qrev = revenue_dict.get(q)
+                rate_rev.append(recv_counts[m]/(qrev/3)*1e6 if qrev and qrev>0 else None)
+            last_valid = None
+            for i in range(len(rate_rev)):
+                if rate_rev[i] is not None: last_valid = rate_rev[i]
+                elif last_valid is not None: rate_rev[i] = last_valid
+                else: rate_rev[i] = 0.0
+            signals["rate_per_rev"] = rate_rev
+        if installed_base_dict:
+            rate_base = []
+            for m in common:
+                yr,mo = m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"
+                ib = installed_base_dict.get(q)
+                rate_base.append(recv_counts[m]/ib*10000 if ib and ib>0 else None)
+            last_valid = None
+            for i in range(len(rate_base)):
+                if rate_base[i] is not None: last_valid = rate_base[i]
+                elif last_valid is not None: rate_base[i] = last_valid
+                else: rate_base[i] = 0.0
+            signals["rate_per_base"] = rate_base
+        accel = [0.0,0.0]+[deltas[i]-deltas[i-1] for i in range(2,len(deltas))]
+        signals["acceleration"] = accel
+        overall_best_rho,overall_best_p,overall_best_lag,overall_best_signal = 0,1.0,0,"raw_counts"
+        signal_analysis = {}; legacy_lag_results = {}
+        for sig_name, sig_vals in signals.items():
+            best_rho,best_p,best_lag = 0,1.0,0; lag_detail = {}
+            for lag in range(0, min(max_lag+1, len(sig_vals)-6)):
+                s_slice = sig_vals[:len(sig_vals)-lag] if lag>0 else sig_vals
+                r_slice = sr[lag:] if lag>0 else sr
+                min_len = min(len(s_slice),len(r_slice))
+                if min_len<8: continue
+                sv,rv = s_slice[:min_len],r_slice[:min_len]
+                if all(v==sv[0] for v in sv) or all(v==rv[0] for v in rv): continue
+                rho,p = _proper_spearman_with_pvalue(sv, rv)
+                lag_detail[f"{lag}mo"] = {"rho":rho,"p":p}
+                if sig_name=="raw_counts": legacy_lag_results[f"{lag}mo"]={"rho":rho,"p":p}
+                if abs(rho)>abs(best_rho): best_rho,best_p,best_lag = rho,p,lag
+            signal_analysis[sig_name] = {"best_rho":best_rho,"best_p":best_p,"best_lag":best_lag,
+                "significant":best_p<0.05,"direction":"negative" if best_rho<0 else "positive","lag_detail":lag_detail}
+            if abs(best_rho)>abs(overall_best_rho):
+                overall_best_rho,overall_best_p,overall_best_lag,overall_best_signal = best_rho,best_p,best_lag,sig_name
+        sig_count = sum(1 for s in signal_analysis.values() if s["significant"])
+        neg_count = sum(1 for s in signal_analysis.values() if s["significant"] and s["direction"]=="negative")
+        avg_abs_rho = sum(abs(s["best_rho"]) for s in signal_analysis.values())/max(len(signal_analysis),1)
+        consistency = neg_count/max(sig_count,1)
+        confidence = min(100,int(abs(overall_best_rho)*40+avg_abs_rho*20+sig_count/len(signal_analysis)*20+consistency*20))
+        overall_sig = overall_best_p<0.05
+        msg = f"Best: \u03C1={overall_best_rho:+.3f} at {overall_best_lag}mo lag (p={overall_best_p:.4f}, signal={overall_best_signal}). "
+        if overall_sig and overall_best_rho<-0.2: msg+=f"MAUDE {overall_best_signal} spikes predict stock declines {overall_best_lag}mo later. "
+        elif overall_sig and overall_best_rho>0.2: msg+="Market pricing in MAUDE data concurrently. "
+        else: msg+="No significant lead-lag detected. "
+        msg+=f"Confidence: {confidence}/100 ({sig_count}/{len(signal_analysis)} signals sig"
+        if neg_count>0: msg+=f", {neg_count} negative"
+        msg+=")."
+        return {"status":"ok","best_rho":overall_best_rho,"best_p":overall_best_p,
+                "best_lag":overall_best_lag,"significant":overall_sig,
+                "direction":"negative" if overall_best_rho<0 else "positive",
+                "lag_results":legacy_lag_results,"message":msg,
+                "best_signal":overall_best_signal,"confidence":confidence,
+                "signal_analysis":signal_analysis,"signals_tested":len(signal_analysis),
+                "signals_significant":sig_count,"signals_negative":neg_count}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:200],"best_rho":0,"best_p":1.0,"best_lag":0,
+                "significant":False,"direction":"none","lag_results":{},"signal_analysis":{},"confidence":0}
+
+# ============================================================
+# MODULE 2: Failure Mode Classification
+# ============================================================
+def analyze_failure_modes(search_query, start, limit=50):
+    url = (f"https://api.fda.gov/device/event.json?"
+           f"search=brand_name:{url_quote(search_query)}+AND+"
+           f"date_received:[{start}+TO+now]&limit={limit}")
+    data = _api_get(url)
+    if not data or "results" not in data:
+        return {"status":"no_data","categories":{},"total":0}
+    categories = {"sensor_failure":0,"adhesion":0,"connectivity":0,"inaccurate_reading":0,
+                  "skin_reaction":0,"alarm_alert":0,"battery":0,"physical_damage":0,
+                  "software":0,"insertion":0,"occlusion":0,"other":0}
+    keywords = {"sensor_failure":["sensor fail","no reading","sensor error","lost signal","signal loss","expired early"],
+                "adhesion":["fell off","adhesive","peel","detach","came off","not stick"],
+                "connectivity":["bluetooth","connect","pair","sync","lost connection","disconnect"],
+                "inaccurate_reading":["inaccurate","wrong reading","false","discrepan","not match","off by"],
+                "skin_reaction":["rash","irritat","red","itch","allerg","skin","welt","blister"],
+                "alarm_alert":["alarm","alert","no sound","speaker","beep","notification","did not alert"],
+                "battery":["battery","charge","power","dead","drain","won't turn on"],
+                "physical_damage":["crack","broke","snap","bent","leak","damage"],
+                "software":["software","app","crash","freeze","update","glitch","display"],
+                "insertion":["insert","needle","pain","bleed","bruis","applicat"],
+                "occlusion":["occlus","block","clog","no deliv","no insulin"]}
+    total = 0
+    for r in data["results"]:
+        for txt_field in ["mdr_text","device_report_product_code"]:
+            texts = r.get(txt_field,[])
+            if isinstance(texts, list):
+                for t in texts:
+                    narrative = t.get("text","").lower() if isinstance(t,dict) else str(t).lower()
+                    if len(narrative) < 10: continue
+                    total += 1
+                    matched = False
+                    for cat, kws in keywords.items():
+                        if any(kw in narrative for kw in kws):
+                            categories[cat] += 1; matched = True; break
+                    if not matched: categories["other"] += 1
+    top = sorted(categories.items(), key=lambda x: -x[1])[:5]
+    return {"status":"ok","categories":categories,"total":total,
+            "top_modes":[{"mode":k,"count":v,"pct":round(v/max(total,1)*100,1)} for k,v in top]}
+
+# ============================================================
+# MODULE 3: SEC EDGAR Filing Activity
+# ============================================================
+def analyze_edgar_filings(ticker):
+    if ticker in ("SQEL","BBNX"): return {"status":"skip","message":"Limited EDGAR history"}
+    cik_map = {"DXCM":"0001093557","PODD":"0001145197","TNDM":"0001438133","ABT":"0000001800","MDT":"0000064670"}
+    cik = cik_map.get(ticker)
+    if not cik: return {"status":"no_cik","message":f"No CIK for {ticker}"}
+    url = f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22&dateRange=custom&startdt=2024-01-01&enddt=2026-12-31&forms=10-K,10-Q,8-K,DEF+14A"
+    data = _api_get(f"https://efts.sec.gov/LATEST/search-index?q={cik}&forms=8-K&dateRange=custom&startdt=2025-01-01&enddt=2026-12-31")
+    try:
+        url2 = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
+        req = Request(url2, headers={"User-Agent":"MAUDE-Monitor/3.2 research@example.com"})
+        with urlopen(req, timeout=15) as resp:
+            filings = json.loads(resp.read().decode())
+        recent = filings.get("filings",{}).get("recent",{})
+        forms = recent.get("form",[])
+        dates = recent.get("filingDate",[])
+        descs = recent.get("primaryDocDescription",[])
+        last_30 = [(f,d,descs[i] if i<len(descs) else "") for i,(f,d) in enumerate(zip(forms,dates))
+                    if d >= (datetime.now()-timedelta(days=90)).strftime("%Y-%m-%d")]
+        form_counts = {}
+        for f,d,desc in last_30:
+            form_counts[f] = form_counts.get(f,0)+1
+        eight_k_count = form_counts.get("8-K",0)
+        return {"status":"ok","total_90d":len(last_30),"form_counts":form_counts,
+                "eight_k_count":eight_k_count,
+                "message":f"{len(last_30)} filings in 90 days ({eight_k_count} 8-Ks)"}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:100]}
+
+# ============================================================
+# MODULE 4: Insider Trading (SEC EDGAR Form 4)
+# ============================================================
+def analyze_insider_trading_detailed(ticker):
+    if ticker in ("SQEL",): return {"status":"skip","message":"Private company"}
+    cik_map = {"DXCM":"0001093557","PODD":"0001145197","TNDM":"0001438133","ABT":"0000001800","MDT":"0000064670","BBNX":"0001828723"}
+    cik = cik_map.get(ticker)
+    if not cik: return {"status":"no_cik","message":f"No CIK for {ticker}"}
+    try:
+        url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
+        req = Request(url, headers={"User-Agent":"MAUDE-Monitor/3.2 research@example.com"})
+        with urlopen(req, timeout=15) as resp:
+            filings = json.loads(resp.read().decode())
+        recent = filings.get("filings",{}).get("recent",{})
+        forms = recent.get("form",[])
+        dates = recent.get("filingDate",[])
+        cutoff = (datetime.now()-timedelta(days=90)).strftime("%Y-%m-%d")
+        form4_count = sum(1 for f,d in zip(forms,dates) if f in ("4","4/A") and d >= cutoff)
+        return {"status":"ok","form4_count_90d":form4_count,
+                "message":f"{form4_count} Form 4 filings in 90 days"}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:100]}
+
+# ============================================================
+# MODULE 5: Clinical Trials (ClinicalTrials.gov)
+# ============================================================
+def analyze_clinical_trials(ticker):
+    sponsor_map = {"DXCM":"Dexcom","PODD":"Insulet","TNDM":"Tandem+Diabetes","ABT":"Abbott","MDT":"Medtronic","BBNX":"Beta+Bionics","SQEL":"Sequel+AG"}
+    sponsor = sponsor_map.get(ticker, ticker)
+    try:
+        url = f"https://clinicaltrials.gov/api/v2/studies?query.spons={url_quote(sponsor)}&filter.overallStatus=RECRUITING,NOT_YET_RECRUITING,ACTIVE_NOT_RECRUITING&pageSize=20"
+        req = Request(url, headers={"User-Agent":"MAUDE-Monitor/3.2"})
+        with urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        studies = data.get("studies",[])
+        active = [{"title":s.get("protocolSection",{}).get("identificationModule",{}).get("briefTitle",""),
+                    "status":s.get("protocolSection",{}).get("statusModule",{}).get("overallStatus",""),
+                    "phase":s.get("protocolSection",{}).get("designModule",{}).get("phases",["N/A"])}
+                   for s in studies[:10]]
+        return {"status":"ok","count":len(studies),"active_studies":active,
+                "message":f"{len(studies)} active/recruiting trials"}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:100]}
+
+# ============================================================
+# MODULE 6: FDA Recall Lookup (Live)
+# ============================================================
+def analyze_fda_recalls(search_query, ticker):
+    try:
+        url = (f"https://api.fda.gov/device/recall.json?"
+               f"search=product_description:{url_quote(search_query)}"
+               f"&sort=event_date_terminated:desc&limit=10")
+        data = _api_get(url)
+        if not data or "results" not in data:
+            return {"status":"ok","count":0,"recalls":[],"message":"No recalls found"}
+        recalls = []
+        for r in data["results"][:5]:
+            recalls.append({"reason":r.get("reason_for_recall","")[:120],
+                            "classification":r.get("classification",""),
+                            "status":r.get("status",""),
+                            "date":r.get("event_date_terminated","")[:10]})
+        class1 = sum(1 for r in recalls if r["classification"]=="Class I")
+        return {"status":"ok","count":len(data["results"]),"recalls":recalls,
+                "class1_count":class1,
+                "message":f'{len(data["results"])} recalls ({class1} Class I)'}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:100]}
+
+# ============================================================
+# MODULE 7: Recall Probability (Heuristic)
+# ============================================================
+def compute_recall_probability(stats, failure_modes, edgar, ticker):
+    if not stats: return {"status":"insufficient_data","probability":0,"message":"No stats"}
+    score = 0
+    if stats["z_score"] >= 3: score += 25
+    elif stats["z_score"] >= 2: score += 15
+    elif stats["z_score"] >= 1.5: score += 10
+    if stats["deaths_3mo"] >= 3: score += 25
+    elif stats["deaths_3mo"] >= 1: score += 15
+    if stats["slope_6mo"] > 50: score += 15
+    elif stats["slope_6mo"] > 20: score += 10
+    if failure_modes and failure_modes.get("status")=="ok":
+        cats = failure_modes.get("categories",{})
+        if cats.get("alarm_alert",0) > 5: score += 15
+        if cats.get("sensor_failure",0) > 10: score += 10
+    score = min(100, score)
+    if score >= 70: level = "HIGH"
+    elif score >= 40: level = "MODERATE"
+    else: level = "LOW"
+    return {"status":"ok","probability":score,"level":level,
+            "message":f"Recall probability: {level} ({score}/100). Heuristic scoring model, not ML-trained."}
+
+# ============================================================
+# MODULE 8: Peer-Relative Ranking
+# ============================================================
+def compute_peer_relative(r_scores):
+    if not r_scores: return {}
+    sorted_peers = sorted(r_scores.items(), key=lambda x: -x[1])
+    result = {}
+    for i,(tk,score) in enumerate(sorted_peers):
+        rank = i+1
+        total = len(sorted_peers)
+        if rank == 1: signal = "WORST"
+        elif rank <= total*0.25: signal = "WEAK"
+        elif rank >= total*0.75: signal = "STRONG"
+        elif rank == total: signal = "BEST"
+        else: signal = "NEUTRAL"
+        result[tk] = {"rank":rank,"total":total,"score":score,"signal":signal,
+                       "peers":sorted_peers,"message":f"Rank {rank}/{total} ({signal})"}
+    return result
+
+# ============================================================
+# MODULE 9: Earnings Predictor (Heuristic)
+# ============================================================
+def compute_earnings_predictor(stats, corr, insider, trials, failure_modes, ticker):
+    if not stats: return {"status":"insufficient_data","score":0}
+    score = 50  # Baseline neutral
+    factors = []
+    # MAUDE trend
+    if stats["z_score"] >= 2:
+        score -= 15; factors.append(("MAUDE z-score elevated",-15))
+    elif stats["z_score"] <= -1:
+        score += 10; factors.append(("MAUDE below average",+10))
+    if stats["slope_6mo"] > 30:
+        score -= 10; factors.append(("Rising MAUDE trend",-10))
+    elif stats["slope_6mo"] < -10:
+        score += 5; factors.append(("Declining MAUDE trend",+5))
+    # Correlation signal
+    if corr and corr.get("significant") and corr.get("direction")=="negative":
+        score -= 10; factors.append(("Negative MAUDE-stock correlation",-10))
+    # Severity
+    if stats["deaths_3mo"] >= 2:
+        score -= 10; factors.append(("Recent deaths reported",-10))
+    if stats["injuries_3mo"] >= 20:
+        score -= 5; factors.append(("Elevated injuries",-5))
+    # Failure modes
+    if failure_modes and failure_modes.get("status")=="ok":
+        cats = failure_modes.get("categories",{})
+        if cats.get("alarm_alert",0) > 5:
+            score -= 5; factors.append(("Alarm/alert issues elevated",-5))
+    score = max(0, min(100, score))
+    if score >= 65: outlook = "POSITIVE"
+    elif score >= 40: outlook = "NEUTRAL"
+    else: outlook = "NEGATIVE"
+    return {"status":"ok","score":score,"outlook":outlook,"factors":factors,
+            "message":f"Earnings outlook: {outlook} ({score}/100). Heuristic scoring model, not ML-trained."}
+
+# ============================================================
+# MODULE 10: Backtest Case Studies (PM-Ready)
+# ============================================================
+def compute_backtest_case_studies(recv_counts, stock_prices, stats, ticker, batch_info=None):
+    try:
+        if not recv_counts or not stock_prices or not stats:
+            return {"status":"insufficient_data","message":"Need MAUDE counts, stock prices, and stats.",
+                    "signals":[],"case_studies":[],"summary":{}}
+        sorted_months = sorted(set(recv_counts.keys()) & set(stock_prices.keys()))
+        if len(sorted_months) < 12:
+            return {"status":"insufficient_data","message":f"Only {len(sorted_months)} months of overlap.",
+                    "signals":[],"case_studies":[],"summary":{}}
+        mc = {m:recv_counts[m] for m in sorted_months}
+        sp = {m:stock_prices[m] for m in sorted_months}
+        z_by_month = {}
+        for i,m in enumerate(sorted_months):
+            window = [mc[sorted_months[j]] for j in range(max(0,i-5),i+1)]
+            if len(window)>=3:
+                mu=sum(window)/len(window); sd=math.sqrt(sum((v-mu)**2 for v in window)/len(window))
+                z_by_month[m] = (mc[m]-mu)/sd if sd>0 else 0.0
+            else: z_by_month[m] = 0.0
+        rate_change = {}; prev=None
+        for m in sorted_months:
+            if prev is not None and mc.get(prev,0)>0:
+                rate_change[m] = (mc[m]-mc[prev])/mc[prev]*100
+            else: rate_change[m] = 0.0
+            prev = m
+        Z_THR, SURGE_THR, COOLDOWN = 1.5, 30.0, 3
+        signals, case_studies = [], []; last_sig_idx = -999
+        for i,m in enumerate(sorted_months):
+            if i-last_sig_idx < COOLDOWN or i < 6: continue
+            z = z_by_month.get(m,0); rc = rate_change.get(m,0)
+            is_batch = False
+            if batch_info:
+                bi = batch_info.get(m)
+                if bi == "batch" or (isinstance(bi,dict) and bi.get("type") in ("batch","recall_batch")):
+                    is_batch = True
+            trigger = None
+            if z >= Z_THR and not is_batch: trigger = f"Z-score spike: {z:+.2f}\u03C3"
+            elif rc >= SURGE_THR and z >= 1.0 and not is_batch: trigger = f"MoM surge: +{rc:.0f}% (z={z:+.1f}\u03C3)"
+            if trigger is None: continue
+            last_sig_idx = i; entry_price = sp[m]
+            fwd = {}
+            for hname,hmo in [("1mo",1),("2mo",2),("3mo",3),("6mo",6)]:
+                if i+hmo < len(sorted_months):
+                    exit_m = sorted_months[i+hmo]; exit_price = sp[exit_m]
+                    ret = (exit_price-entry_price)/entry_price*100
+                    short_pnl = -(exit_price-entry_price)/entry_price*10000
+                    fwd[hname] = {"exit_month":exit_m,"exit_price":round(exit_price,2),
+                                  "long_return_pct":round(ret,2),"short_return_pct":round(-ret,2),
+                                  "short_pnl_10k":round(short_pnl,2)}
+            signal = {"month":m,"z_score":round(z,2),"mom_change_pct":round(rc,1),"trigger":trigger,
+                      "entry_price":round(entry_price,2),"is_batch":is_batch,"forward_returns":fwd}
+            signals.append(signal)
+            best_horizon,best_short_pnl = None,0
+            for h,data in fwd.items():
+                if data["short_pnl_10k"]>best_short_pnl: best_short_pnl=data["short_pnl_10k"]; best_horizon=h
+            cs = {"signal_month":m,"ticker":ticker,"trigger":trigger,"entry_price":round(entry_price,2),
+                  "maude_reports":mc[m],"z_score":round(z,2),"best_horizon":best_horizon,
+                  "best_short_pnl_10k":round(best_short_pnl,2) if best_horizon else 0,
+                  "profitable_short":best_short_pnl>0 if best_horizon else False,"forward_returns":fwd}
+            if best_horizon and best_short_pnl>0:
+                ed = fwd[best_horizon]
+                cs["narrative"] = (f"{m}: MAUDE {trigger}. {ticker} at ${entry_price:.2f}. "
+                    f"Short signal. Stock fell to ${ed['exit_price']:.2f} over {best_horizon} "
+                    f"({ed['short_return_pct']:+.1f}%). P&L on $10K short: +${best_short_pnl:,.0f}.")
+            elif best_horizon:
+                ed = fwd[best_horizon]
+                cs["narrative"] = (f"{m}: MAUDE {trigger}. {ticker} at ${entry_price:.2f}. "
+                    f"Short signal MISSED \u2014 stock rose over {best_horizon} ({ed['long_return_pct']:+.1f}%). "
+                    f"Loss on $10K short: ${abs(best_short_pnl):,.0f}.")
+            else: cs["narrative"] = f"{m}: Signal fired but insufficient forward data."
+            case_studies.append(cs)
+        total = len(signals); profits = sum(1 for cs in case_studies if cs.get("profitable_short"))
+        total_pnl = sum(cs.get("best_short_pnl_10k",0) for cs in case_studies if cs.get("best_horizon"))
+        hit_rate = profits/total*100 if total>0 else 0; avg_pnl = total_pnl/total if total>0 else 0
+        if hit_rate>=60: grade="STRONG"
+        elif hit_rate>=45: grade="MODERATE"
+        else: grade="WEAK"
+        summary = {"total_signals":total,"profitable_shorts":profits,"losing_shorts":total-profits,
+                   "hit_rate_pct":round(hit_rate,1),"total_pnl_10k":round(total_pnl,2),
+                   "avg_pnl_per_signal_10k":round(avg_pnl,2),"grade":grade,
+                   "message":f"{grade}: {hit_rate:.0f}% hit rate, {total} signals, P&L: ${total_pnl:+,.0f}/$10K"}
+        return {"status":"ok","signals":signals,"case_studies":case_studies,"summary":summary,"message":summary["message"]}
+    except Exception as e:
+        return {"status":"error","message":str(e)[:200],"signals":[],"case_studies":[],"summary":{}}
+
+# ============================================================
+# MODULE 11-13: Framework stubs (Google Trends, Short Interest, Payer, International)
+# ============================================================
+def analyze_google_trends(ticker):
+    return {"status":"framework","message":"Requires pytrends package. Not available on GitHub Actions free tier."}
+def analyze_short_interest(ticker):
+    return {"status":"framework","message":"Requires Yahoo Finance scraping. May be blocked on GitHub Actions."}
+def analyze_payer_coverage(ticker):
+    coverage = {"DXCM":"Broad commercial + Medicare CGM","PODD":"Broad commercial + Medicare pump",
+                "TNDM":"Broad commercial + Medicare pump","ABT":"Broad commercial + Medicare CGM",
+                "MDT":"Broad commercial + Medicare pump","BBNX":"Limited (new product)","SQEL":"Pre-market"}
+    return {"status":"ok","message":coverage.get(ticker,"Unknown coverage status")}
+def analyze_international(ticker):
+    return {"status":"framework","message":"MHRA (UK) and international regulators have no structured API for automated querying."}
+
+# ============================================================
+# HTML HELPERS FOR ENHANCED MODULES
+# ============================================================
+def render_case_study_html(bt, ticker):
+    if not bt or bt.get("status")!="ok": return "<div class='msub'>No case study data available.</div>"
+    summary = bt.get("summary",{}); cases = bt.get("case_studies",[])
+    gc_map = {"STRONG":"#27ae60","MODERATE":"#f39c12","WEAK":"#c0392b"}
+    grade = summary.get("grade","WEAK"); gc = gc_map.get(grade,"#888")
+    html = f'<div class="sg" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">'
+    html += f'<div class="si"><div class="sil">GRADE</div><div class="siv" style="color:{gc}">{grade}</div></div>'
+    html += f'<div class="si"><div class="sil">HIT RATE</div><div class="siv">{summary.get("hit_rate_pct",0):.0f}%</div></div>'
+    html += f'<div class="si"><div class="sil">SIGNALS</div><div class="siv">{summary.get("total_signals",0)}</div></div>'
+    pnl = summary.get("total_pnl_10k",0); pc = "#27ae60" if pnl>0 else "#c0392b"
+    html += f'<div class="si"><div class="sil">TOTAL P&L/$10K</div><div class="siv" style="color:{pc}">${pnl:+,.0f}</div></div></div>'
+    html += f'<div class="msub" style="margin-bottom:10px">{summary.get("message","")}</div>'
+    if cases:
+        html += '<table style="width:100%;border-collapse:collapse;font-size:11px">'
+        html += '<tr style="background:rgba(0,0,0,0.05)"><th style="padding:4px;text-align:left">Date</th><th>Trigger</th><th>Entry</th><th>Best Exit</th><th>Return</th><th>P&L/$10K</th></tr>'
+        for cs in cases[-8:]:
+            bh = cs.get("best_horizon"); fwd = cs.get("forward_returns",{})
+            if bh and bh in fwd:
+                ed = fwd[bh]; ret_str = f'{ed["short_return_pct"]:+.1f}%'
+                pv = cs.get("best_short_pnl_10k",0); pnl_str = f'${pv:+,.0f}'
+                rc = "#27ae60" if pv>0 else "#c0392b"; exit_str = f'${ed["exit_price"]:.2f} ({bh})'
+            else: ret_str="\u2014"; pnl_str="\u2014"; rc="#888"; exit_str="\u2014"
+            trig = cs.get("trigger",""); trig = trig[:22]+"..." if len(trig)>25 else trig
+            html += f'<tr><td style="padding:3px">{cs.get("signal_month","")}</td><td style="padding:3px;font-size:10px">{trig}</td>'
+            html += f'<td style="padding:3px">${cs.get("entry_price",0):.2f}</td><td style="padding:3px">{exit_str}</td>'
+            html += f'<td style="padding:3px;color:{rc}">{ret_str}</td><td style="padding:3px;color:{rc};font-weight:600">{pnl_str}</td></tr>'
+        html += '</table>'
+    html += '<div class="msub" style="margin-top:8px;font-size:10px;opacity:0.7">Strategy: Short when MAUDE z-score &gt; 1.5\u03C3 or MoM surge &gt; 30%. Batch/recall months excluded. P&L assumes $10K notional. Past performance \u2260 future results.</div>'
+    return html
+
+def render_corr_accordion_content(ec, tk):
+    if not ec or not isinstance(ec,dict): return ""
+    ec_rho=ec.get("best_rho",0); ec_p=ec.get("best_p",1.0); ec_lag=ec.get("best_lag",0)
+    ec_sig=ec.get("significant",False); ec_conf=ec.get("confidence",0)
+    best_signal=ec.get("best_signal","raw_counts"); sig_analysis=ec.get("signal_analysis",{})
+    if ec_sig and ec_rho<-0.2: ec_col="#c0392b"
+    elif ec_sig and ec_rho>0.2: ec_col="#e67e22"
+    else: ec_col="var(--tx3)"
+    conf_col="#27ae60" if ec_conf>=60 else "#f39c12" if ec_conf>=35 else "#c0392b"
+    c = '<div class="sg" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">'
+    c += f'<div class="si"><div class="sil">BEST \u03C1</div><div class="siv" style="color:{ec_col}">{ec_rho:+.3f}</div></div>'
+    c += f'<div class="si"><div class="sil">LAG</div><div class="siv">{ec_lag}mo</div></div>'
+    c += f'<div class="si"><div class="sil">P-VALUE</div><div class="siv">{"*" if ec_sig else ""}{ec_p:.4f}</div></div>'
+    c += f'<div class="si"><div class="sil">CONFIDENCE</div><div class="siv" style="color:{conf_col}">{ec_conf}/100</div></div></div>'
+    c += f'<div class="msub" style="margin-bottom:8px">{ec.get("message","")}</div>'
+    if sig_analysis:
+        sig_labels={"raw_counts":"Raw Counts","count_delta":"MoM Change","z_score":"Z-Score",
+                    "rate_per_rev":"Rate/$M Rev","rate_per_base":"Rate/10K Users","acceleration":"Acceleration"}
+        c += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:6px">'
+        c += '<tr style="background:rgba(0,0,0,0.05)"><th style="padding:3px;text-align:left">Signal</th><th>Best \u03C1</th><th>Lag</th><th>p-value</th><th>Sig?</th></tr>'
+        for sname,sdata in sig_analysis.items():
+            label=sig_labels.get(sname,sname); srho=sdata.get("best_rho",0); slag=sdata.get("best_lag",0)
+            sp=sdata.get("best_p",1.0); ssig=sdata.get("significant",False)
+            rc="#27ae60" if ssig and srho<0 else "#c0392b" if ssig and srho>0 else "#888"
+            star="\u2713" if ssig else "\u2014"
+            bold=' style="font-weight:600"' if sname==best_signal else ""
+            c += f'<tr{bold}><td style="padding:3px">{"\u2192 " if sname==best_signal else ""}{label}</td>'
+            c += f'<td style="padding:3px;color:{rc};text-align:center">{srho:+.3f}</td>'
+            c += f'<td style="padding:3px;text-align:center">{slag}mo</td>'
+            c += f'<td style="padding:3px;text-align:center">{sp:.4f}</td>'
+            c += f'<td style="padding:3px;text-align:center">{star}</td></tr>'
+        c += '</table>'
+    c += '<div class="msub" style="margin-top:8px;font-size:10px;opacity:0.7">Multi-signal analysis tests 6 MAUDE metrics against stock returns at 0-6mo lags. Confidence (0-100) combines strength, significance &amp; directional consistency. Rate-normalized signals strip growth noise for cleaner correlation.</div>'
+    return c
+    # ============================================================
 # PIPELINE
 # ============================================================
-def run_pipeline(backfill=False,quick=False):
-    start="20230101" if backfill else ("20250901" if quick else "20230101")
-    all_res,summary={},[]
+def run_pipeline(backfill=False, quick=False):
+    start = "20230101" if backfill else ("20250901" if quick else "20230101")
+    all_res, summary = {}, []
     if HAS_MODULES: print("ALL ENHANCED MODULES LOADED (inline)")
     else: print("BASIC mode - no enhanced modules")
+
     print("\n=== Fetching live stock prices ===")
     live_stocks = fetch_live_stock_prices()
-    global STOCK_MONTHLY; STOCK_MONTHLY = merge_stock_data(STOCK_MONTHLY, live_stocks)
-    print(f"  Stock data: {len(live_stocks)} tickers updated live, {len(STOCK_MONTHLY)} total")
-    global _stock_source; _stock_source = f"LIVE ({len(live_stocks)} tickers via yfinance)" if live_stocks else "HARDCODED (install yfinance for live data)"
-    rev_status = get_revenue_staleness(); print(f"  Revenue data: {rev_status['status']} ({rev_status['message']})")
+    global STOCK_MONTHLY, _stock_source
+    STOCK_MONTHLY = merge_stock_data(STOCK_MONTHLY, live_stocks)
+    _stock_source = f"LIVE ({len(live_stocks)} tickers via yfinance)" if live_stocks else "HARDCODED (install yfinance for live)"
+    print(f"  {_stock_source}")
+    rev_status = get_revenue_staleness()
+    print(f"  Revenue: {rev_status['message']}")
+
+    # Collect R-scores for peer ranking
+    r_scores_by_company = {}
+
     for dev in DEVICES:
-        did=dev["id"]; print(f"\n{'='*50}\n{dev['name']} ({dev['ticker']})")
-        recv=fetch_counts(dev["search"],"date_received",start); time.sleep(0.3)
-        evnt=fetch_counts(dev["search"],"date_of_event",start); time.sleep(0.3)
-        sev=fetch_severity(dev["search"],start); batch=detect_batch(recv,evnt)
-        stats=compute_stats(recv,sev,dev["ticker"]); rscore=compute_r_score(stats) if stats else None
-        modules={"enhanced_corr":None,"failure_modes":None,"google_trends":None,"insider":None,"trials":None,"short_interest":None,"edgar":None,"payer":None,"international":None,"recall_prob":None,"earnings_pred":None,"backtest":None,"peer_relative":None,"recalls":None}
+        did = dev["id"]; tk = dev["ticker"]; rk = dev.get("rev_key", tk)
+        print(f"\n{'='*50}\n{dev['name']} ({tk})")
+
+        recv = fetch_counts(dev["search"], "date_received", start); time.sleep(0.3)
+        evnt = fetch_counts(dev["search"], "date_of_event", start); time.sleep(0.3)
+        sev = fetch_severity(dev["search"], start)
+
+        # RECALL-AWARE batch detection
+        batch = detect_batch(recv, evnt, ticker=tk)
+
+        stats = compute_stats(recv, sev, tk)
+        rscore = compute_r_score(stats) if stats else None
+        if rscore is not None and dev.get("is_combined"):
+            r_scores_by_company[tk] = rscore
+
+        modules = {"enhanced_corr":None,"failure_modes":None,"google_trends":None,
+                   "insider":None,"trials":None,"short_interest":None,"edgar":None,
+                   "payer":None,"international":None,"recall_prob":None,
+                   "earnings_pred":None,"backtest":None,"peer_relative":None,"recalls":None}
+
         if HAS_MODULES and stats:
+            # Organic counts for correlation (strips recall batch noise)
+            organic = get_organic_counts(recv, batch)
+
             try:
-                print("  Running: Enhanced correlation..."); modules["enhanced_corr"]=compute_enhanced_correlation(recv,STOCK_MONTHLY.get(dev["ticker"],{}),max_lag=6)
-            except Exception as e: modules["enhanced_corr"]={"status":"error","message":str(e)[:100]}
+                print("  Running: Enhanced multi-signal correlation...")
+                modules["enhanced_corr"] = compute_enhanced_correlation(
+                    organic, STOCK_MONTHLY.get(tk, {}), max_lag=6,
+                    revenue_dict=QUARTERLY_REVENUE.get(rk, {}),
+                    installed_base_dict=INSTALLED_BASE_K.get(rk, {}))
+            except Exception as e:
+                modules["enhanced_corr"] = {"status":"error","message":str(e)[:100]}
+
             if not did.endswith("_ALL"):
-                try: print("  Running: Failure mode NLP..."); modules["failure_modes"]=analyze_failure_modes(dev["search"],start,limit=50)
-                except Exception as e: modules["failure_modes"]={"status":"error","message":str(e)[:100]}
-            is_company=did.endswith("_ALL") or did in ("SQEL_TWIIST","BBNX_ILET")
+                try:
+                    print("  Running: Failure mode classification...")
+                    modules["failure_modes"] = analyze_failure_modes(dev["search"], start, limit=50)
+                except Exception as e:
+                    modules["failure_modes"] = {"status":"error","message":str(e)[:100]}
+
+            is_company = did.endswith("_ALL") or did in ("SQEL_TWIIST","BBNX_ILET")
             if is_company:
-                for mod_name,mod_fn in [("google_trends",analyze_google_trends),("insider",analyze_insider_trading),("trials",analyze_clinical_trials),("short_interest",analyze_short_interest),("payer",analyze_payer_coverage)]:
-                    try: print(f"  Running: {mod_name}..."); modules[mod_name]=mod_fn(dev["ticker"])
-                    except Exception as e: modules[mod_name]={"status":"error","message":str(e)[:100]}
-            if did.endswith("_ALL"):
-                try: print("  Running: EDGAR..."); modules["edgar"]=analyze_edgar_filings(dev["ticker"])
-                except Exception as e: modules["edgar"]={"status":"error","message":str(e)[:100]}
-                try: brand=dev["name"].split("(")[0].strip().split(" ")[0]; modules["international"]=analyze_international(dev["ticker"],[brand])
-                except Exception as e: modules["international"]={"status":"error","message":str(e)[:100]}
-            try: print("  Running: Recall probability..."); modules["recall_prob"]=compute_recall_probability(modules.get("failure_modes"),stats)
-            except Exception as e: modules["recall_prob"]={"status":"error","message":str(e)[:100]}
-        all_res[did]={"device":dev,"received":recv,"by_event":evnt,"severity":sev,"batch_flags":batch,"stats":stats,"r_score":rscore,**modules}
-        if stats:
-            lt=stats[-1]; ec=modules["enhanced_corr"]
-            summary.append({"id":did,"name":dev["name"],"ticker":dev["ticker"],"company":dev["company"],"month":lt["month"],"reports":lt["count"],"z_score":lt["z_score"],"rate_per_m":lt["rate_per_m"],"rate_per_10k":lt["rate_per_10k"],"slope_6m":lt["slope_6m"],"deaths_3mo":sum(s["deaths"] for s in stats[-3:]),"injuries_3mo":sum(s["injuries"] for s in stats[-3:]),"r_score":rscore["total"] if rscore else None,"signal":rscore["signal"] if rscore else "NORMAL","batch":batch.get(lt["month"],{}).get("is_batch",False),"corr_rho":(ec or {}).get("best_rho"),"corr_sig":(ec or {}).get("significant")})
-            print(f"  >> {lt['month']} | {lt['count']:,} | Z:{lt['z_score']:+.2f} | R:{rscore['total'] if rscore else '-'}")
-    if HAS_MODULES:
-        print("\n=== Post-loop: Peer scoring, earnings prediction, backtesting ===")
-        company_r={}
-        for did,r in all_res.items():
-            if did.endswith("_ALL") and r.get("r_score"): company_r[r["device"]["ticker"]]=r["r_score"]["total"]
-        peer_rel=compute_peer_relative(company_r)
-        for did,r in all_res.items():
-            tk=r["device"]["ticker"]; r["peer_relative"]=peer_rel.get(tk)
-            if r.get("r_score") and r.get("stats"):
-                try: r["earnings_pred"]=predict_earnings_surprise(r["stats"],r["r_score"],peer_rel.get(tk))
-                except: r["earnings_pred"]=None
-            if did.endswith("_ALL") and r.get("stats"):
-                try: print(f"  Backtesting {did}..."); r["backtest"]=backtest_r_score(r["stats"],STOCK_MONTHLY.get(tk,{}),threshold=50)
-                except: r["backtest"]=None
-    os.makedirs("data",exist_ok=True)
-    for did,r in all_res.items():
-        if r.get("stats"):
-            with open(f"data/{did}_monthly.csv","w",newline="") as f:
-                w=csv.DictWriter(f,fieldnames=r["stats"][0].keys()); w.writeheader(); w.writerows(r["stats"])
-    with open("data/latest_summary.json","w") as f: json.dump({"generated":datetime.now().isoformat(),"devices":summary},f,indent=2)
-    return all_res,summary
+                for mod_name, mod_fn in [("google_trends",analyze_google_trends),
+                                          ("insider",analyze_insider_trading_detailed),
+                                          ("trials",analyze_clinical_trials),
+                                          ("short_interest",analyze_short_interest),
+                                          ("payer",analyze_payer_coverage)]:
+                    try:
+                        print(f"  Running: {mod_name}...")
+                        modules[mod_name] = mod_fn(tk)
+                    except Exception as e:
+                        modules[mod_name] = {"status":"error","message":str(e)[:100]}
 
-# END OF PART 2 — paste Part 3 directly below this line
-# ============================================================
-# HTML HELPERS
-# ============================================================
-def _mbox(title, data, fallback_msg="Module not loaded or no data available."):
-    if data is None: return f'<div class="mbox"><h4>{title} <span class="mstat mgrey">N/A</span></h4><div class="msub">{fallback_msg}</div></div>'
-    st=data.get("status","unknown") if isinstance(data,dict) else "unknown"
-    msg=data.get("message","") if isinstance(data,dict) else str(data)
-    if isinstance(msg,str) and len(msg)>350: msg=msg[:350]+"..."
-    cls="mok" if st=="ok" else "mwarn" if st in ("framework","no_pytrends","blocked","severity_only","no_text","no_alerts","no_data","no_signals","no_query","no_cik","no_ticker","insufficient_data","no_filings","no_trials","parse_error") else "merr" if st=="error" else "mgrey"
-    return f'<div class="mbox"><h4>{title} <span class="mstat {cls}">{st.upper()}</span></h4><div class="msub">{msg}</div></div>'
-
-def _accordion(aid, title, status_html, content):
-    return f'''<div class="acc"><button class="acc-btn" onclick="toggleAcc('{aid}')"><span>{title}</span><span class="acc-right">{status_html}<span class="acc-arrow" id="arr-{aid}">\u25B6</span></span></button><div class="acc-body" id="{aid}" style="display:none">{content}</div></div>'''
-
-def _build_product_card(did, r, cd):
-    dv=r["device"]; st=r["stats"]; lt=st[-1]; rs=r.get("r_score"); sig=rs["signal"] if rs else "NORMAL"
-    d3=sum(s["deaths"] for s in st[-3:]); i3=sum(s["injuries"] for s in st[-3:])
-    evts=PRODUCT_EVENTS.get(did,[]); ehtml=""
-    if evts:
-        ehtml='<div class="ebox"><h4>TIMELINE</h4>'
-        for e in evts:
-            tc="ew" if "CLASS" in e["type"] or "WARNING" in e["type"] else "eok"
-            ehtml+=f'<div class="evr"><span class="evd">{e["date"]}</span><span class="{tc}">{e["type"]}</span> {e["desc"]}</div>'
-        ehtml+='</div>'
-    rhtml=""
-    if rs:
-        rcol="#c0392b" if rs["total"]>=50 else "#e67e22" if rs["total"]>=30 else "#27ae60"
-        rhtml=f'<div class="rg"><div class="rgv" style="color:{rcol}">{rs["total"]}</div><div class="rgr"><div class="rgl">R-Score (0-100)</div><div class="rgt"><div class="rgf" style="width:{min(100,rs["total"])}%;background:{rcol}"></div></div></div></div>'
-        rhtml+=f'<div class="rcg"><div class="rci"><span class="rcv">{rs["z_c"]}</span>Z</div><div class="rci"><span class="rcv">{rs["sev_c"]}</span>Sev</div><div class="rci"><span class="rcv">{rs["gap_c"]}</span>Gap</div><div class="rci"><span class="rcv">{rs["slope_c"]}</span>Slope</div><div class="rci"><span class="rcv">{rs["ib_c"]}</span>IB</div></div>'
-    fm=r.get("failure_modes"); fmhtml=""
-    if fm and isinstance(fm,dict) and fm.get("status")=="ok" and fm.get("modes"):
-        fmcontent=f'<div class="msub">{fm["total_analyzed"]} reports analyzed.</div>'
-        for cat,info in sorted(fm["modes"].items(),key=lambda x:-x[1]["count"]):
-            fmcontent+=f'<div class="fmr"><span class="fml">{info["label"]}</span><div class="fmb"><div style="width:{info["pct"]}%;background:var(--g)"></div></div><span class="fmp">{info["pct"]}%</span></div>'
-            fmcontent+=f'<div class="msub" style="padding-left:136px;font-size:9px;margin-top:0">{info["desc"]}</div>'
-        fmhtml=_accordion(f"fm-{did}","Failure Modes (NLP)",'<span class="mstat mok">OK</span>',fmcontent)
-    elif fm:
-        fmhtml=_accordion(f"fm-{did}","Failure Modes (NLP)",f'<span class="mstat mwarn">{fm.get("status","N/A").upper()}</span>',f'<div class="msub">{fm.get("message","")}</div>')
-    rp=r.get("recall_prob"); rphtml=""
-    if rp and isinstance(rp,dict) and rp.get("probability") is not None:
-        prob=rp["probability"]; pcol="#c0392b" if prob>0.5 else "#e67e22" if prob>0.25 else "#27ae60"
-        rpcontent=f'<div class="msub">{rp.get("message","")}</div><div class="rgt" style="margin-top:4px"><div class="rgf" style="width:{prob*100}%;background:{pcol}"></div></div>'
-        rphtml=_accordion(f"rp-{did}","Recall Probability (6mo)",f'<span class="mstat" style="color:{pcol}">{rp.get("signal","?")}</span>',rpcontent)
-    zc2="neg" if lt["z_score"]>1.5 else "pos" if lt["z_score"]<-1.5 else ""
-    slc2="neg" if lt["slope_6m"]>0 else "pos"
-    d3c2="neg" if d3>0 else ""
-    return f'''<div class="card" data-id="{did}"><div class="chdr"><div><h3>{dv["name"]}</h3><span class="tk">{dv["ticker"]}</span></div><span class="sig sig-{sig}">{sig}</span></div>
-<p class="desc">{dv["description"]}</p>{ehtml}
-<div class="sg"><div class="si"><div class="sil">LATEST</div><div class="siv">{fmt0(lt["count"])}</div><div class="sis">{lt["month"]}</div></div>
-<div class="si"><div class="sil">Z-SCORE</div><div class="siv {zc2}">{lt["z_score"]:+.2f}</div><div class="sis">12mo avg {fmt0(lt["avg_12m"])}</div></div>
-<div class="si"><div class="sil">RATE/$M</div><div class="siv">{fmt2(lt["rate_per_m"])}</div><div class="sis">reports per $M rev</div></div>
-<div class="si"><div class="sil">RATE/10K</div><div class="siv">{fmt2(lt["rate_per_10k"])}</div><div class="sis">per 10K users</div></div></div>
-<div class="sg"><div class="si"><div class="sil">TREND</div><div class="siv {slc2}">{lt["slope_6m"]:+.1f}/mo</div><div class="sis">6mo slope</div></div>
-<div class="si"><div class="sil">DEATHS 3MO</div><div class="siv {d3c2}">{d3}</div></div>
-<div class="si"><div class="sil">INJURIES 3MO</div><div class="siv">{i3}</div></div>
-<div class="si"><div class="sil">SEVERITY</div><div class="siv">{fmt0(lt["severity_score"])}</div><div class="sis">D\u00d710 I\u00d73 M\u00d71</div></div></div>
-{rhtml}{fmhtml}{rphtml}
-<div class="cc" id="cc-{did}"><button class="cb active" data-v="reports">Reports</button><button class="cb" data-v="rate_m">Rate/$M</button><button class="cb" data-v="rate_10k">Rate/10K</button><button class="cb" data-v="severity">Severity</button><button class="cb" data-v="zscore">Z-Score</button><button class="cb" data-v="stock">Stock</button><button class="cb" data-v="smoothed">Smoothed</button><button class="cb rst" data-v="reset">Reset</button></div>
-<div class="cdesc" id="cdesc-{did}">Click a chart tab above.</div>
-<div class="cw"><canvas id="ch-{did}"></canvas></div></div>\n'''
-
-# ============================================================
-# generate_html — MAIN DASHBOARD GENERATOR
-# ============================================================
-def generate_html(all_res,summary):
-    os.makedirs("docs",exist_ok=True)
-    cd={}
-    for did,r in all_res.items():
-        if not r.get("stats"): continue
-        cd[did]={"l":[s["month"] for s in r["stats"]],"c":[s["count"] for s in r["stats"]],"ma":[s["ma6"] for s in r["stats"]],"u2":[s["upper_2sd"] for s in r["stats"]],"l2":[s["lower_2sd"] for s in r["stats"]],"u1":[s["upper_1sd"] for s in r["stats"]],"l1":[s["lower_1sd"] for s in r["stats"]],"z":[s["z_score"] for s in r["stats"]],"rm":[s["rate_per_m"] for s in r["stats"]],"r10":[s["rate_per_10k"] for s in r["stats"]],"d":[s["deaths"] for s in r["stats"]],"inj":[s["injuries"] for s in r["stats"]],"mal":[s["malfunctions"] for s in r["stats"]],"dev":r["device"],"rs":r.get("r_score"),"bm":[m for m,bf in r["batch_flags"].items() if bf.get("is_batch")],"sp":STOCK_MONTHLY.get(r["device"]["ticker"],{}),"evts":PRODUCT_EVENTS.get(did,[])}
-    so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3}
-    summary.sort(key=lambda x:(so.get(x["signal"],4),-(x["r_score"] or 0)))
-    trows=""
-    for s in summary:
-        zc="neg" if s["z_score"]>Z_WARN else "pos" if s["z_score"]<-Z_WARN else ""
-        rc="neg" if (s["r_score"] or 0)>=50 else "warn" if (s["r_score"] or 0)>=30 else ""
-        bw=' <span class="bw">Batch</span>' if s.get("batch") else ""
-        ic="1" if s["id"].endswith("_ALL") else "0"
-        cr="\u2014"
-        if s.get("corr_rho") is not None: cr=f'{s["corr_rho"]:+.3f}'+(" *" if s.get("corr_sig") else "")
-        d3c="neg" if s["deaths_3mo"]>0 else ""
-        trows+=f'<tr class="pr" data-co="{s["company"]}" data-id="{s["id"]}" data-sig="{s["signal"]}" data-comb="{ic}"><td>{s["name"]}{bw}</td><td>{s["ticker"]}</td><td>{s["month"]}</td><td>{fmt0(s["reports"])}</td><td class="{zc}">{s["z_score"]:+.2f}</td><td class="{rc}">{fmt(s["r_score"])}</td><td>{fmt2(s["rate_per_m"])}</td><td>{fmt2(s["rate_per_10k"])}</td><td>{s["slope_6m"]:+.1f}</td><td class="{d3c}">{s["deaths_3mo"]}</td><td>{s["injuries_3mo"]}</td><td>{cr}</td><td><span class="sig sig-{s["signal"]}">{s["signal"]}</span></td></tr>\n'
-
-    company_html={}
-    for comp in COMPANIES:
-        all_did=None; all_r=None
-        for did,r in all_res.items():
-            if did.endswith("_ALL") and r["device"]["company"]==comp: all_did=did; all_r=r; break
-        if not all_did:
-            for did,r in all_res.items():
-                if r["device"]["company"]==comp and r.get("stats"): all_did=did; all_r=r; break
-        if not all_r or not all_r.get("stats"): company_html[comp]="<p>No data available.</p>"; continue
-        tk=all_r["device"]["ticker"]; lt_stat=all_r["stats"][-1]; rs=all_r.get("r_score"); sig=rs["signal"] if rs else "NORMAL"
-        sp_data=STOCK_MONTHLY.get(tk,{}); sp_sorted=sorted(sp_data.keys())
-        sp_latest=f"${sp_data[sp_sorted[-1]]}" if sp_sorted else "\u2014"
-        sp_label="" if tk not in ("SQEL",) else " (Private)"
-        if tk=="MDT_DM": sp_label=" (MDT parent)"
-        co_hdr=f'''<div class="co-hdr"><div class="co-left"><h2>{comp}</h2><span class="co-tk">{tk}{sp_label} \u2014 {sp_latest}</span></div><span class="sig sig-{sig}" style="font-size:13px;padding:5px 16px">{sig}</span></div>
-<div class="co-desc">{all_r["device"]["description"]}</div>
-<div class="sg" style="margin-bottom:12px"><div class="si"><div class="sil">LATEST REPORTS</div><div class="siv">{fmt0(lt_stat["count"])}</div><div class="sis">{lt_stat["month"]}</div></div>
-<div class="si"><div class="sil">Z-SCORE</div><div class="siv {"neg" if lt_stat["z_score"]>1.5 else "pos" if lt_stat["z_score"]<-1.5 else ""}">{lt_stat["z_score"]:+.2f}</div></div>
-<div class="si"><div class="sil">R-SCORE</div><div class="siv {"neg" if (rs or dict()).get("total",0)>=50 else ""}">{fmt(rs["total"]) if rs else "\u2014"}</div></div>
-<div class="si"><div class="sil">RATE/$M REV</div><div class="siv">{fmt2(lt_stat["rate_per_m"])}</div></div></div>\n'''
-        acc_html=""
-        ins=all_r.get("insider")
-        if ins and isinstance(ins,dict) and ins.get("status")=="ok":
-            f4=ins.get("form4_count",0); ins_buys=ins.get("buys",0); ins_sells=ins.get("sells",0); ins_other=ins.get("other",0)
-            ins_buy_val=ins.get("total_buy_value",0); ins_sell_val=ins.get("total_sell_value",0)
-            ins_dir=ins.get("net_direction","UNKNOWN"); ins_signal=ins.get("signal","neutral")
-            ins_col="#c0392b" if ins_signal in ("bearish","moderate_sell") else "#27ae60" if ins_signal in ("bullish","moderate_buy") else "var(--tx3)"
-            ins_content=f'<div class="sg" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px"><div class="si"><div class="sil">TOTAL (90D)</div><div class="siv">{f4}</div></div><div class="si"><div class="sil">BUYS</div><div class="siv pos">{ins_buys}</div><div class="sis">${ins_buy_val:,.0f}</div></div><div class="si"><div class="sil">SELLS</div><div class="siv neg">{ins_sells}</div><div class="sis">${ins_sell_val:,.0f}</div></div><div class="si"><div class="sil">DIRECTION</div><div class="siv" style="color:{ins_col};font-size:13px">{ins_dir}</div></div></div>'
-            txns=ins.get("transactions",[])
-            if txns:
-                ins_content+='<div class="msub"><strong>Recent transactions:</strong></div>'
-                for txn in txns[:6]:
-                    txn_col="pos" if txn.get("type")=="BUY" else "neg" if txn.get("type")=="SELL" else ""
-                    ins_content+=f'<div class="msub" style="padding-left:8px"><span style="font-family:monospace;color:var(--tx3)">{txn.get("date","")}</span> <span class="{txn_col}">{txn.get("type","?")}</span> {txn.get("owner","Unknown")} \u2014 {txn.get("shares",0):,} shares (${txn.get("value",0):,.0f})</div>'
-            ins_content+=f'<div class="msub" style="margin-top:6px"><strong>Signal:</strong> {ins.get("message","")}</div>'
-            acc_html+=_accordion(f"ins-{tk}","SEC Form 4 Insider Trading",f'<span class="mstat" style="color:{ins_col}">{ins_dir}</span>',ins_content)
-        ed=all_r.get("edgar")
-        if ed and isinstance(ed,dict) and ed.get("status")=="ok":
-            acc_html+=_accordion(f"ed-{tk}","SEC Filing Activity (EDGAR)",f'<span class="mstat mok">{ed.get("annual_filings",0)}A+{ed.get("quarterly_filings",0)}Q</span>',f'<div class="msub">{ed.get("message","")}</div>')
-        ct=all_r.get("trials")
-        if ct and isinstance(ct,dict):
-            ct_content=f'<div class="msub">{ct.get("message","")}</div>'
-            if ct.get("status")=="ok" and ct.get("trials"):
-                for trial in ct["trials"][:5]: ct_content+=f'<div class="msub" style="margin-top:4px">{trial["nct_id"]}: {trial["title"]} <span class="mstat mgrey">{trial["status"]}</span></div>'
-            acc_html+=_accordion(f"ct-{tk}","Clinical Trials",f'<span class="mstat {"mok" if ct.get("status")=="ok" else "mwarn"}">{ct.get("total",0) if ct.get("status")=="ok" else "N/A"}</span>',ct_content)
-        ec=all_r.get("enhanced_corr")
-        if ec and isinstance(ec,dict) and ec.get("status")=="ok":
-            ec_rho=ec.get("best_rho",0); ec_lag=ec.get("best_lag",0); ec_p=ec.get("best_p",1); ec_sig=ec.get("significant",False)
-            ec_col="#c0392b" if ec_rho<-0.2 and ec_sig else "#27ae60" if ec_rho>0.2 and ec_sig else "var(--tx3)"
-            ec_content=f'<div class="sg" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px"><div class="si"><div class="sil">BEST CORR</div><div class="siv" style="color:{ec_col}">\u03C1={ec_rho:+.3f}</div></div><div class="si"><div class="sil">LAG</div><div class="siv">{ec_lag}mo</div></div><div class="si"><div class="sil">SIGNIFICANT?</div><div class="siv {"pos" if ec_sig else "neg"}">{"YES" if ec_sig else "NO"} (p={ec_p:.3f})</div></div></div>'
-            lag_results=ec.get("lag_results",{})
-            if lag_results:
-                ec_content+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:3px;margin:4px 0 8px">'
-                for lag_name in sorted(lag_results.keys()):
-                    lr=lag_results[lag_name]; lr_col="#c0392b" if lr["rho"]<-0.2 and lr["p"]<0.05 else "#27ae60" if lr["rho"]>0.2 and lr["p"]<0.05 else "var(--tx3)"
-                    star=" *" if lr["p"]<0.05 else ""
-                    ec_content+=f'<div class="si" style="padding:4px 6px"><div class="sil">{lag_name}</div><div class="siv" style="font-size:13px;color:{lr_col}">{lr["rho"]:+.3f}{star}</div></div>'
-                ec_content+='</div>'
-            acc_html+=_accordion(f"corr-{tk}","MAUDE-Stock Correlation",f'<span class="mstat" style="color:{ec_col}">\u03C1={ec_rho:+.3f}</span>',ec_content)
-        bt=all_r.get("backtest")
-        if bt and isinstance(bt,dict):
-            bt_content=f'<div class="msub">{bt.get("message","")}</div>'
-            if bt.get("status")=="ok" and bt.get("results"):
-                for window,res in bt["results"].items():
-                    wcol="pos" if res["avg_return"]<0 else "neg"
-                    bt_content+=f'<div class="msub">{window}: avg <span class="{wcol}">{res["avg_return"]:+.1f}%</span>, win {res["win_rate"]:.0f}% (n={res["n"]})</div>'
-            acc_html+=_accordion(f"bt-{tk}","R-Score Backtest",f'<span class="mstat {"mok" if bt.get("status")=="ok" and bt.get("results") else "mwarn"}">{bt.get("status","N/A").upper()}</span>',bt_content)
-        recalls=all_r.get("recalls")
-        if recalls and isinstance(recalls,dict) and recalls.get("status")=="ok" and recalls.get("recalls"):
-            rc_content=f'<div class="msub"><strong>{recalls["total"]} recalls found.</strong></div>'
-            for rcl in recalls["recalls"]:
-                rc_cls_col="#c0392b" if "I" in rcl.get("classification","") and "II" not in rcl.get("classification","") else "#e67e22"
-                rc_content+=f'<div style="border:1px solid var(--bd);border-radius:6px;padding:8px;margin:4px 0;border-left:3px solid {rc_cls_col}"><div style="display:flex;justify-content:space-between;font-size:10px"><span style="font-weight:700;color:{rc_cls_col}">{rcl.get("classification","")}</span><span style="color:var(--tx3)">{rcl.get("date_posted","")}</span></div><div class="msub" style="margin:0">{rcl.get("reason","")}</div></div>'
-            acc_html+=_accordion(f"rc-{tk}","FDA Recalls (Live)",f'<span class="mstat" style="color:#c0392b">{recalls["total"]} RECALLS</span>',rc_content)
-        pr=all_r.get("peer_relative")
-        if pr and isinstance(pr,dict):
-            prcol="#c0392b" if pr.get("signal") in ("WORST","WEAK") else "#27ae60" if pr.get("signal") in ("BEST","STRONG") else "var(--tx3)"
-            pr_content=f'<div class="sg" style="grid-template-columns:repeat(3,1fr)"><div class="si"><div class="sil">POSITION</div><div class="siv" style="color:{prcol}">{pr.get("signal","?")}</div></div><div class="si"><div class="sil">RANK</div><div class="siv">{pr.get("rank","?")}/{pr.get("total","?")}</div></div><div class="si"><div class="sil">PEER AVG</div><div class="siv">{pr.get("peer_avg","\u2014")}</div></div></div>'
-            acc_html+=_accordion(f"pr-{tk}","Peer-Relative Position",f'<span class="mstat" style="color:{prcol}">{pr.get("signal","?")} ({pr.get("rank","?")}/{pr.get("total","?")})</span>',pr_content)
-        ep=all_r.get("earnings_pred")
-        if ep and isinstance(ep,dict) and ep.get("status")=="ok":
-            epcol="#c0392b" if ep["prediction"]=="LIKELY MISS" else "#27ae60" if ep["prediction"]=="LIKELY BEAT" else "var(--tx3)"
-            ep_content=f'<div class="sg" style="grid-template-columns:repeat(3,1fr)"><div class="si"><div class="sil">PREDICTION</div><div class="siv" style="color:{epcol}">{ep["prediction"]}</div></div><div class="si"><div class="sil">CONFIDENCE</div><div class="siv">{ep.get("confidence",0):.0f}%</div></div><div class="si"><div class="sil">SCORE</div><div class="siv">{ep.get("score",50)}/100</div></div></div>'
-            ep_factors=ep.get("factors",[])
-            if ep_factors:
-                for fct in ep_factors: ep_content+=f'<div class="msub" style="padding-left:12px">{fct}</div>'
-            acc_html+=_accordion(f"ep-{tk}","Earnings Predictor",f'<span class="mstat" style="color:{epcol}">{ep["prediction"]}</span>',ep_content)
-        for mod_key,mod_title in [("google_trends","Google Trends"),("short_interest","Short Interest"),("payer","CMS Payer"),("international","International (MHRA)")]:
-            mod=all_r.get(mod_key)
-            if mod and isinstance(mod,dict) and mod.get("status")=="ok":
-                acc_html+=_accordion(f"{mod_key}-{tk}",mod_title,'<span class="mstat mok">OK</span>',f'<div class="msub">{mod.get("message","")}</div>')
-        cards_html=""
-        for did,r in all_res.items():
-            if not r.get("stats"): continue
-            if r["device"]["company"]!=comp: continue
-            if did==all_did: continue
-            cards_html+=_build_product_card(did,r,cd)
-        if all_r.get("stats"): cards_html=_build_product_card(all_did,all_r,cd)+cards_html
-        company_html[comp]=f'{co_hdr}<div class="acc-section"><h3 class="section-title">Company-Level Intelligence</h3>{acc_html}</div><h3 class="section-title" style="margin-top:16px">Product-Level Detail</h3><div class="grid">{cards_html}</div>'
-
-    tab_ids={"Summary":"summary","Dexcom":"dexcom","Insulet":"insulet","Tandem":"tandem","Abbott":"abbott","Beta Bionics":"bbnx","Medtronic":"medtronic","Sequel Med Tech":"sequel","Procept BioRobotics":"prct","Inspire Medical Systems":"insp","CVRx":"cvrx"}
-    tab_btns='<div class="tabs">'
-    for name,tid in tab_ids.items():
-        act=' active' if tid=="summary" else ""
-        tab_btns+=f'<button class="tab{act}" onclick="showTab(\'{tid}\')">{name}</button>'
-    tab_btns+='<button class="tab" onclick="showTab(\'casestudies\')">Case Studies</button></div>'
-    modules_str="ALL 13 MODULES" if HAS_MODULES else "BASIC"
-    updated_str=datetime.now().strftime('%b %d, %Y %H:%M ET')
-    rev_stale=get_revenue_staleness()
-    rev_color="#c0392b" if rev_stale["status"]=="STALE" else "#e67e22" if rev_stale["status"]=="AGING" else "#27ae60"
-    live_stocks = globals().get('_stock_source', 'HARDCODED')
-    stock_note = live_stocks
-
-    # ========== HTML TOP: head + CSS ==========
-    html_top=f'''<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MAUDE Monitor V3.2</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root{{--g:#2B5F3A;--gx:#e8f5ec;--gp:#f4faf6;--bg:#fff;--bg2:#f8faf9;--bg3:#f0f3f1;--tx:#1a2a1f;--tx2:#4a5f50;--tx3:#7a8f80;--bd:#d4e0d8;--red:#c0392b;--org:#e67e22}}
-*{{margin:0;padding:0;box-sizing:border-box}}body{{background:var(--bg);color:var(--tx);font-family:'Inter',system-ui,sans-serif;font-size:14px;line-height:1.6}}
-.ct{{max-width:1440px;margin:0 auto;padding:24px 32px}}
-header{{display:flex;justify-content:space-between;align-items:center;padding:20px 0;border-bottom:2px solid var(--g);margin-bottom:20px}}
-header h1{{font-size:22px;font-weight:700;color:var(--g)}}header .sub{{font-size:13px;color:var(--tx2)}}header .meta{{text-align:right;font-size:11px;color:var(--tx3)}}
-h2{{font-size:18px;font-weight:700;color:var(--g);margin:20px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--bd)}}
-.tabs{{display:flex;gap:2px;margin-bottom:20px;border-bottom:2px solid var(--bd);flex-wrap:wrap}}
-.tab{{background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-bottom:none;border-radius:6px 6px 0 0;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit}}
-.tab:hover{{background:var(--gx)}}.tab.active{{background:var(--g);color:#fff;border-color:var(--g)}}
-.tabcontent{{display:none}}.tabcontent.active{{display:block}}
-.sig{{display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase}}
-.sig-NORMAL{{background:var(--gx);color:var(--g)}}.sig-WATCH{{background:#fef3e0;color:#b8860b}}.sig-ELEVATED{{background:#fdecea;color:var(--red)}}.sig-CRITICAL{{background:#f5c6cb;color:#721c24}}
-.bw{{background:#fef3e0;color:#b8860b;font-size:10px;padding:1px 6px;border-radius:4px}}
-.co-hdr{{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:var(--gp);border:2px solid var(--g);border-radius:10px;margin-bottom:12px}}
-.co-left h2{{margin:0;border:none;padding:0}}.co-tk{{font-size:13px;color:var(--tx2);font-weight:500}}
-.co-desc{{font-size:12px;color:var(--tx2);padding:8px 12px;background:var(--bg2);border-radius:6px;border-left:3px solid var(--g);margin-bottom:12px;line-height:1.6}}
-.section-title{{font-size:13px;font-weight:700;color:var(--g);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px dashed var(--bd)}}
-.acc-section{{margin-bottom:16px}}.acc{{border:1px solid var(--bd);border-radius:8px;margin-bottom:4px;overflow:hidden}}
-.acc-btn{{width:100%;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg2);border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;color:var(--tx);text-align:left}}
-.acc-btn:hover{{background:var(--gx)}}.acc-right{{display:flex;align-items:center;gap:8px}}
-.acc-arrow{{font-size:10px;color:var(--tx3);transition:transform .2s}}.acc-arrow.open{{transform:rotate(90deg)}}
-.acc-body{{padding:10px 14px;background:var(--bg);border-top:1px solid var(--bd)}}
-.filters{{display:flex;gap:12px;align-items:center;margin-bottom:16px;padding:10px 14px;background:var(--bg2);border:1px solid var(--bd);border-radius:8px;flex-wrap:wrap}}
-.filters label{{font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase}}
-.filters select{{padding:4px 8px;border:1px solid var(--bd);border-radius:4px;font-size:12px;font-family:inherit;background:var(--bg)}}
-.guide{{background:var(--gp);border:1px solid var(--bd);border-radius:10px;padding:20px;margin-bottom:20px}}
-.guide h3{{font-size:15px;font-weight:700;color:var(--g);margin-bottom:12px}}
-.gg{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.gi{{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:12px}}
-.gi h4{{font-size:12px;font-weight:700;color:var(--g);margin-bottom:4px}}.gi p{{font-size:11px;color:var(--tx2)}}
-table{{width:100%;border-collapse:collapse}}th{{text-align:left;padding:8px 10px;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--tx3);border-bottom:2px solid var(--g);background:var(--bg);position:sticky;top:0}}
-td{{padding:7px 10px;border-bottom:1px solid var(--bd);font-size:12px;white-space:nowrap}}tr:hover{{background:var(--gp)}}
-.neg{{color:var(--red);font-weight:500}}.pos{{color:var(--g);font-weight:500}}.warn{{color:var(--org);font-weight:500}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px}}
-.card{{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}}
-.chdr{{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}}.card h3{{font-size:15px;font-weight:700}}.tk{{font-size:11px;color:var(--tx3)}}
-.desc{{font-size:11px;color:var(--tx2);line-height:1.5;margin-bottom:10px;padding:8px 10px;background:var(--gp);border-radius:6px;border-left:3px solid var(--g)}}
-.ebox{{margin-bottom:8px}}.ebox h4{{font-size:10px;font-weight:600;color:var(--tx3);text-transform:uppercase;margin-bottom:4px}}
-.evr{{font-size:10px;color:var(--tx2);padding:3px 0 3px 8px;border-left:2px solid var(--bd);margin-bottom:2px}}
-.evd{{font-family:monospace;color:var(--tx3);margin-right:4px}}
-.ew{{background:#fdecea;color:var(--red);font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;margin-right:3px}}
-.eok{{background:var(--gx);color:var(--g);font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;margin-right:3px}}
-.sg{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}}
-.si{{padding:6px 8px;background:var(--bg2);border-radius:6px;border:1px solid var(--bd)}}
-.sil{{font-size:8px;font-weight:600;text-transform:uppercase;color:var(--tx3)}}.siv{{font-size:15px;font-weight:700;margin-top:1px}}.sis{{font-size:9px;color:var(--tx3)}}
-.rg{{display:flex;align-items:center;gap:12px;padding:8px 10px;background:var(--bg2);border:1px solid var(--bd);border-radius:8px;margin-bottom:6px}}
-.rgv{{font-size:28px;font-weight:800;min-width:44px}}.rgr{{flex:1}}.rgl{{font-size:10px;color:var(--tx3);margin-bottom:3px}}
-.rgt{{height:7px;background:var(--bg3);border-radius:4px;overflow:hidden}}.rgf{{height:100%;border-radius:4px}}
-.rcg{{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:8px}}
-.rci{{text-align:center;padding:3px;background:var(--bg2);border-radius:4px;border:1px solid var(--bd);font-size:8px;color:var(--tx3)}}.rcv{{display:block;font-size:12px;font-weight:700;color:var(--tx)}}
-.mbox{{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:6px}}
-.mbox h4{{font-size:10px;font-weight:600;color:var(--tx3);text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;gap:6px}}
-.msub{{font-size:11px;color:var(--tx2);margin-top:3px;line-height:1.5}}
-.mstat{{font-size:8px;font-weight:700;text-transform:uppercase;padding:1px 5px;border-radius:3px}}
-.mok{{background:var(--gx);color:var(--g)}}.mwarn{{background:#fef3e0;color:#b8860b}}.merr{{background:#fdecea;color:var(--red)}}.mgrey{{background:var(--bg3);color:var(--tx3)}}
-.fmr{{display:flex;align-items:center;gap:6px;margin-bottom:2px}}.fml{{width:130px;font-size:10px;color:var(--tx2)}}
-.fmb{{flex:1;height:10px;background:var(--bg3);border-radius:3px;overflow:hidden}}.fmb div{{height:100%;border-radius:3px}}.fmp{{width:36px;text-align:right;font-weight:600;font-size:11px}}
-.cc{{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px}}
-.cb{{background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-radius:4px;padding:3px 8px;font-size:10px;font-family:inherit;cursor:pointer;font-weight:500}}
-.cb:hover,.cb.active{{background:var(--g);color:#fff;border-color:var(--g)}}.cb.rst{{margin-left:auto;background:transparent;border-color:var(--bd);color:var(--tx3)}}
-.cdesc{{font-size:11px;color:var(--tx2);padding:8px 10px;background:var(--gp);border-radius:6px;margin-bottom:6px;border-left:3px solid var(--g);min-height:36px;line-height:1.5}}
-.cw{{position:relative;height:260px}}
-.disc{{margin-top:24px;padding:14px;background:var(--bg2);border:1px solid var(--bd);border-radius:8px;font-size:10px;color:var(--tx3);line-height:1.5}}
-.cs-card{{background:var(--bg);border:2px solid var(--bd);border-radius:12px;padding:24px;margin-bottom:24px}}
-.cs-card.signal-negative{{border-left:4px solid var(--red)}}.cs-card.signal-positive{{border-left:4px solid var(--g)}}
-.cs-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px}}
-.cs-header h3{{font-size:16px;font-weight:700;color:var(--g);margin:0}}
-.cs-lag-badge{{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;background:var(--gx);color:var(--g)}}
-.cs-chart-wrap{{height:320px;margin-bottom:16px;position:relative}}
-.cs-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}}
-.cs-metric{{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:12px;text-align:center}}
-.cs-metric .lbl{{font-size:11px;color:var(--tx3);text-transform:uppercase;font-weight:600;display:block;margin-bottom:4px}}
-.cs-metric .val{{font-size:18px;font-weight:700;color:var(--tx)}}.cs-metric .val.neg{{color:var(--red)}}.cs-metric .val.pos{{color:var(--g)}}
-.cs-lag-table{{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}}
-.cs-lag-table th{{background:var(--gp);color:var(--g);padding:6px 10px;text-align:center;font-weight:600;border:1px solid var(--bd)}}
-.cs-lag-table td{{padding:6px 10px;text-align:center;border:1px solid var(--bd)}}.cs-lag-table td.best{{background:#fef3e0;font-weight:700}}
-.cs-sig-table{{width:100%;border-collapse:collapse;font-size:12px}}
-.cs-sig-table th{{background:var(--gp);color:var(--g);padding:6px 10px;text-align:left;font-weight:600;border:1px solid var(--bd)}}
-.cs-sig-table td{{padding:6px 10px;text-align:left;border:1px solid var(--bd)}}.cs-sig-table td.neg{{color:var(--red);font-weight:600}}.cs-sig-table td.pos{{color:var(--g);font-weight:600}}
-.cs-thesis{{background:var(--gp);border:1px solid var(--g);border-radius:8px;padding:16px;margin-top:12px;font-size:13px;line-height:1.6}}
-.cs-thesis strong{{color:var(--g)}}
-.cs-intro{{font-size:14px;color:var(--tx2);line-height:1.7;margin-bottom:24px;max-width:900px}}
-</style></head><body><div class="ct">
-<header><div><h1>MAUDE Monitor V3.2</h1><div class="sub">FDA Adverse Event Intelligence \u2014 {len(COMPANIES)} Companies, {len(DEVICES)} Products</div></div>
-<div class="meta">Updated {updated_str}<br>Modules: {modules_str}<br>Stock: {stock_note}<br><span style="color:{rev_color}">Revenue: {rev_stale["message"]}</span></div></header>
-{tab_btns}
-<div class="tabcontent active" id="tc-summary">
-<div class="guide"><h3>How to Read This Dashboard</h3><div class="gg">
-<div class="gi"><h4>Z-Score</h4><p>Std devs from 12mo mean. &gt;+1.5=WATCH, &gt;+2.0=ELEVATED, &gt;+3.0=CRITICAL.</p></div>
-<div class="gi"><h4>R-Score (0-100)</h4><p>Composite risk: Z-anomaly(20)+severity(20)+growth gap(20)+slope(20)+IB rate(20). &gt;50=investigate, &gt;70=act.</p></div>
-<div class="gi"><h4>Rate/$M Revenue</h4><p>Reports per $M revenue. Rising rate = quality deteriorating faster than growth.</p></div>
-<div class="gi"><h4>Rate/10K Users</h4><p>Reports per 10K installed base users. Most precise normalization.</p></div>
-<div class="gi"><h4>6mo Trend</h4><p>Linear regression slope. Positive = accelerating. The momentum signal.</p></div>
-<div class="gi"><h4>Batch Detection</h4><p>Orange = manufacturer dumped old reports at once. NOT a real surge.</p></div>
-<div class="gi"><h4>Correlation</h4><p>Spearman rho vs stock returns. * = p&lt;0.05. Negative = predictive.</p></div>
-<div class="gi"><h4>Smoothed View</h4><p>V3.2: Auto-selects best SMA/EWMA to align date_received with date_of_event.</p></div>
-</div></div>
-<div class="filters"><label>Company:</label><select id="fc" onchange="af()"><option value="all">All</option>'''
-    for c in COMPANIES: html_top+=f'<option value="{c}">{c}</option>'
-    html_top+='''</select><label>Signal:</label><select id="fs" onchange="af()"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="ELEVATED">Elevated+</option><option value="WATCH">Watch+</option></select><label>View:</label><select id="fv" onchange="af()"><option value="all">All Products</option><option value="combined">Company-Level Only</option><option value="individual">Individual Only</option></select></div>'''
-    html_top+=f'''<h2>All Products \u2014 Latest Month</h2>
-<div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Ticker</th><th>Month</th><th>Reports</th><th>Z-Score</th><th>R-Score</th><th>Rate/$M</th><th>Rate/10K</th><th>Trend</th><th>Deaths</th><th>Injuries</th><th>Corr</th><th>Signal</th></tr></thead><tbody>{trows}</tbody></table></div></div>'''
-    for comp in COMPANIES:
-        tid=tab_ids.get(comp,"unknown"); ch=company_html.get(comp,"<p>No data.</p>")
-        html_top+=f'\n<div class="tabcontent" id="tc-{tid}">{ch}</div>'
-    html_top+='\n<div class="disc">Research only. Not investment advice. MAUDE has 30-90 day reporting lag. Revenue from SEC filings. Installed base from earnings calls.</div></div>'
-
-    # ========== JAVASCRIPT ==========
-    js='''<script>
-var defined_cd=__CD__;var charts={};
-var chartDescs={"reports":"REPORTS + SIGMA BANDS: Green bars = monthly reports. Shaded bands = 1/2 sigma. Orange = batch. Dark green line = 6mo MA.","rate_m":"RATE/$M: Reports divided by monthly revenue. Rising = quality deteriorating faster than growth.","rate_10k":"RATE/10K: Reports per 10K installed base users.","severity":"SEVERITY: Red=deaths(10x), Orange=injuries(3x), Green=malfunctions(1x).","zscore":"Z-SCORE: Standard deviations from 12mo mean. Red line at +2 sigma.","stock":"STOCK OVERLAY: Green=price, Red=MAUDE. Look for MAUDE spikes preceding stock declines.","smoothed":"SMOOTHED: Best-fit smoothed MAUDE counts (auto SMA/EWMA). Dashed grey = raw. Higher fit r = better alignment with actual event dates."};
-function showTab(id){document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active")});document.querySelectorAll(".tabcontent").forEach(function(t){t.classList.remove("active")});var ct=document.querySelector('.tab[onclick*="'+id+'"]');if(ct)ct.classList.add("active");var tc=document.getElementById("tc-"+id);if(tc)tc.classList.add("active");}
-function toggleAcc(id){var el=document.getElementById(id);var arr=document.getElementById("arr-"+id);if(el.style.display==="none"){el.style.display="block";if(arr)arr.classList.add("open");}else{el.style.display="none";if(arr)arr.classList.remove("open");}}
-function init(){for(var d in defined_cd){if(defined_cd.hasOwnProperty(d)){mk(d,defined_cd[d],"reports");}}document.querySelectorAll(".cc").forEach(function(cc){cc.querySelectorAll(".cb").forEach(function(btn){btn.addEventListener("click",function(){var mycc=this.parentNode;var did=mycc.id.replace("cc-","");var v=this.getAttribute("data-v");if(v==="reset"){if(charts[did])charts[did].resetZoom();return;}mycc.querySelectorAll(".cb:not(.rst)").forEach(function(s){s.classList.remove("active")});this.classList.add("active");var descEl=document.getElementById("cdesc-"+did);if(descEl&&chartDescs[v]){descEl.textContent=chartDescs[v];}mk(did,defined_cd[did],v);});});});}
-function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();var ds=[],yL="",bm=D.bm||[],evts=D.evts||[];var evtMs=evts.map(function(e){return e.date;});
-if(v==="smoothed"){var bc2=D.l.map(function(m){return bm.indexOf(m)>=0?"rgba(230,126,34,0.3)":"rgba(30,144,255,0.3)";});var bbc2=D.l.map(function(m){return bm.indexOf(m)>=0?"rgba(230,126,34,0.8)":"rgba(30,144,255,0.7)";});var smLabel=D.sm_method||"Smoothed";var smCorr=D.sm_corr||0;ds=[{label:smLabel,data:D.sm||D.c,backgroundColor:bc2,borderColor:bbc2,borderWidth:1},{label:"Raw (date_received)",data:D.c,type:"line",borderColor:"rgba(150,150,150,0.4)",borderWidth:1,borderDash:[4,4],fill:false,pointRadius:0,tension:0.2}];yL="Smoothed ("+smLabel+", r="+smCorr+")";}
-else if(v==="reports"){var bc=D.l.map(function(m,i){return bm.indexOf(m)>=0?"rgba(230,126,34,0.5)":evtMs.indexOf(m)>=0?"rgba(192,57,43,0.4)":"rgba(43,95,58,0.25)";});ds=[{label:"2\\u03C3 upper",data:D.u2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:"+1",pointRadius:0,order:5},{label:"2\\u03C3 lower",data:D.l2,borderWidth:0,backgroundColor:"rgba(43,95,58,0.06)",fill:false,pointRadius:0,order:5},{label:"1\\u03C3 upper",data:D.u1,borderWidth:0,backgroundColor:"rgba(43,95,58,0.10)",fill:"+1",pointRadius:0,order:4},{label:"1\\u03C3 lower",data:D.l1,borderWidth:0,fill:false,pointRadius:0,order:4},{label:"Reports",data:D.c,borderColor:"rgba(43,95,58,0.85)",backgroundColor:bc,borderWidth:1.5,type:"bar",order:2},{label:"6mo MA",data:D.ma,borderColor:"#2B5F3A",borderWidth:2.5,fill:false,pointRadius:0,tension:0.3,order:1}];yL="Monthly Reports";}
-else if(v==="rate_m"){ds=[{label:"Rate/$M",data:D.rm.map(function(v){return v===null?undefined:v;}),borderColor:"#2B5F3A",backgroundColor:"rgba(43,95,58,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per $M Revenue";}
-else if(v==="rate_10k"){ds=[{label:"Rate/10K",data:D.r10.map(function(v){return v===null?undefined:v;}),borderColor:"#8B4513",backgroundColor:"rgba(139,69,19,0.2)",borderWidth:1.5,type:"bar"}];yL="Reports per 10K Users";}
-else if(v==="severity"){ds=[{label:"Deaths",data:D.d,backgroundColor:"rgba(192,57,43,0.8)",borderWidth:0,stack:"s"},{label:"Injuries",data:D.inj,backgroundColor:"rgba(230,126,34,0.7)",borderWidth:0,stack:"s"},{label:"Malfunctions",data:D.mal,backgroundColor:"rgba(43,95,58,0.3)",borderWidth:0,stack:"s"}];yL="Events by Type";}
-else if(v==="zscore"){ds=[{label:"Z-Score",data:D.z,backgroundColor:D.z.map(function(zv){return zv>2?"rgba(192,57,43,0.8)":zv>1.5?"rgba(230,126,34,0.7)":zv<-1.5?"rgba(43,95,58,0.6)":"rgba(43,95,58,0.25)";}),borderWidth:0,type:"bar"},{label:"+2\\u03C3",data:D.l.map(function(){return 2;}),borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false},{label:"-2\\u03C3",data:D.l.map(function(){return -2;}),borderColor:"rgba(43,95,58,0.5)",borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false}];yL="Z-Score";}
-else if(v==="stock"){var sp=D.sp||{};var sl=[],sv=[],sc=[];D.l.forEach(function(m,i){if(sp[m]){sl.push(m);sv.push(sp[m]);sc.push(D.c[i]);}});if(sl.length<2){var de=document.getElementById("cdesc-"+did);if(de)de.textContent="Limited stock data.";return;}ds=[{label:"Stock ($)",data:sv,borderColor:"#2B5F3A",borderWidth:2,fill:false,pointRadius:1.5,tension:0.2},{label:"MAUDE",data:sc,borderColor:"rgba(192,57,43,0.6)",borderWidth:1.5,fill:false,pointRadius:0,tension:0.2,yAxisID:"y1"}];charts[did]=new Chart(ctx,{type:"line",data:{labels:sl,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{position:"left",grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#2B5F3A",font:{size:10}},title:{display:true,text:"Stock ($)",color:"#2B5F3A",font:{size:11}}},y1:{position:"right",grid:{drawOnChartArea:false},ticks:{color:"#c0392b",font:{size:10}},title:{display:true,text:"MAUDE",color:"#c0392b",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1}}}});return;}
-charts[did]=new Chart(ctx,{type:"line",data:{labels:D.l,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},scales:{x:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#7a8f80",maxRotation:45,font:{size:10}}},y:{grid:{color:"rgba(0,0,0,.05)"},ticks:{color:"#4a5f50",font:{size:10}},title:{display:true,text:yL,color:"#4a5f50",font:{size:11}}}},plugins:{legend:{labels:{color:"#4a5f50",boxWidth:12,font:{size:10}}},zoom:{pan:{enabled:true,mode:"x"},zoom:{wheel:{enabled:true},pinch:{enabled:true},drag:{enabled:true,backgroundColor:"rgba(43,95,58,0.08)"},mode:"x"}},tooltip:{backgroundColor:"#fff",titleColor:"#1a2a1f",bodyColor:"#4a5f50",borderColor:"#d4e0d8",borderWidth:1,callbacks:{afterBody:function(it){var idx=it[0].dataIndex;var month=D.l[idx];var msgs=[];if(bm.indexOf(month)>=0)msgs.push("BATCH REPORTING");evts.forEach(function(e){if(e.date===month)msgs.push(e.type+": "+e.desc);});return msgs.length?"\\n"+msgs.join("\\n"):"";}}}}}});}
-function af(){var co=document.getElementById("fc").value;var sig=document.getElementById("fs").value;var vw=document.getElementById("fv").value;var so={"CRITICAL":0,"ELEVATED":1,"WATCH":2,"NORMAL":3};document.querySelectorAll(".pr,.card").forEach(function(el){var sh=true;var ec=el.getAttribute("data-co");var es=el.getAttribute("data-sig");var ic=el.getAttribute("data-comb")==="1";if(co!=="all"&&ec!==co)sh=false;if(sig!=="all"){var sv=so[es]||3;if(sig==="CRITICAL"&&es!=="CRITICAL")sh=false;if(sig==="ELEVATED"&&sv>1)sh=false;if(sig==="WATCH"&&sv>2)sh=false;}if(vw==="combined"&&!ic)sh=false;if(vw==="individual"&&ic)sh=false;el.style.display=sh?"":"none";});}
-document.addEventListener("DOMContentLoaded",init);
-</script>'''
-    full_html=html_top+js+"</body></html>"
-    full_html=full_html.replace("__CD__",json.dumps(cd))
-    with open("docs/index.html","w") as f: f.write(full_html)
-    print(f"\nDashboard written: docs/index.html ({len(full_html)//1024}KB)")
-
-# END OF PART 3 — paste Part 4 directly below this line
-# ============================================================
-# V3.2 WRAPPER: Enriches pipeline results with smoothing + case studies
-# ============================================================
-_v31_run_pipeline = run_pipeline
-
-def run_pipeline(backfill=False, quick=False):
-    all_res, summary = _v31_run_pipeline(backfill, quick)
-    print(f"\n{'='*50}\nV3.2: Computing smoothing + case studies...")
-    for did, R in all_res.items():
-        dev = R.get("device", {})
-        recv = R.get("received", {})
-        evnt = R.get("by_event", {})
-        try:
-            R["smooth"] = smooth_batch_data(recv, evnt)
-            sm = R["smooth"]
-            if sm["method"] not in ("none","raw"):
-                print(f"  [{did}] Smoothing: {sm['method']}-{sm['window']} (fit r={sm['fit_corr']})")
-        except Exception as ex:
-            R["smooth"] = {"smoothed":dict(recv) if recv else {},"method":"none","window":0,"raw":dict(recv) if recv else {},"fit_corr":0.0}
-            print(f"  [{did}] Smoothing error: {ex}")
-        R["case_study"] = None
-        if dev.get("case_study"):
             try:
-                cs_ticker = CASE_STUDY_TICKER_MAP.get(did, dev.get("ticker",""))
-                print(f"  [{did}] Case Study: fetching stock for {cs_ticker} from 2020...")
-                cs_stock = get_monthly_stock(cs_ticker, "20200101")
-                cs_events = CASE_STUDY_EVENTS.get(cs_ticker, [])
-                if cs_stock:
-                    cs_data = compute_case_study(cs_ticker, recv, cs_stock, cs_events)
-                    R["case_study"] = cs_data
-                    if cs_data:
-                        print(f"  [{did}] Lag={cs_data['optimal_lag']['lag']}mo r={cs_data['optimal_lag']['corr']} hit={cs_data['hit_rate']}%")
-                else:
-                    print(f"  [{did}] No stock data for {cs_ticker}")
-                time.sleep(0.3)
-            except Exception as ex:
-                print(f"  [{did}] Case study error: {ex}")
-    print("V3.2 enrichment complete.\n")
+                print("  Running: FDA recalls...")
+                modules["recalls"] = analyze_fda_recalls(dev["search"], tk)
+            except Exception as e:
+                modules["recalls"] = {"status":"error","message":str(e)[:100]}
+
+            if is_company:
+                try:
+                    print("  Running: EDGAR filings...")
+                    modules["edgar"] = analyze_edgar_filings(tk)
+                except Exception as e:
+                    modules["edgar"] = {"status":"error","message":str(e)[:100]}
+
+            try:
+                print("  Running: Recall probability...")
+                modules["recall_prob"] = compute_recall_probability(stats, modules.get("failure_modes"), modules.get("edgar"), tk)
+            except Exception as e:
+                modules["recall_prob"] = {"status":"error","message":str(e)[:100]}
+
+            try:
+                print("  Running: Case study backtest...")
+                modules["backtest"] = compute_backtest_case_studies(
+                    recv, STOCK_MONTHLY.get(tk, {}), stats, tk, batch_info=batch)
+            except Exception as e:
+                modules["backtest"] = {"status":"error","message":str(e)[:100]}
+
+            try:
+                print("  Running: Earnings predictor...")
+                modules["earnings_pred"] = compute_earnings_predictor(
+                    stats, modules.get("enhanced_corr"), modules.get("insider"),
+                    modules.get("trials"), modules.get("failure_modes"), tk)
+            except Exception as e:
+                modules["earnings_pred"] = {"status":"error","message":str(e)[:100]}
+
+        # Build signal
+        signal = "NORMAL"
+        if rscore is not None:
+            if rscore >= 70: signal = "CRITICAL"
+            elif rscore >= 50: signal = "ELEVATED"
+            elif rscore >= 30: signal = "WATCH"
+
+        all_res[did] = {"device":dev,"stats":stats,"r_score":rscore,"batch":batch,
+                        "recv":recv,"evnt":evnt,"sev":sev,"signal":signal,"modules":modules}
+
+        s_entry = {"id":did,"name":dev["name"],"ticker":tk,"signal":signal,
+                   "r_score":rscore or 0,"z_score":stats["z_score"] if stats else 0}
+        summary.append(s_entry)
+        print(f"  Signal: {signal} | R={rscore} | Z={stats['z_score']:+.2f}" if stats else f"  No data")
+
+    # Peer-relative ranking
+    if r_scores_by_company:
+        peer_results = compute_peer_relative(r_scores_by_company)
+        for did, res in all_res.items():
+            tk = res["device"]["ticker"]
+            if tk in peer_results:
+                res["modules"]["peer_relative"] = peer_results[tk]
+
     return all_res, summary
 
 # ============================================================
-# V3.2 WRAPPER: Patches generated HTML with smoothing data + case studies tab
+# HTML DASHBOARD GENERATION
 # ============================================================
-_v31_generate_html = generate_html
+def _accordion(acc_id, title, stat_html, content):
+    return (f'<div class="acc"><div class="acch" onclick="toggleAcc(\'{acc_id}\')">'
+            f'<span>{title}</span>{stat_html}<span class="arr" id="arr-{acc_id}">\u25B6</span></div>'
+            f'<div class="accb" id="{acc_id}" style="display:none">{content}</div></div>')
 
 def generate_html(all_res, summary):
-    _v31_generate_html(all_res, summary)
-    html_path = "docs/index.html"
-    try:
-        with open(html_path, "r") as f: html = f.read()
-    except Exception as ex:
-        print(f"[V3.2] Could not read {html_path}: {ex}"); return
-    print("[V3.2] Patching HTML with smoothing data + case studies...")
-    original_len = len(html)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M ET")
+    rev_status = get_revenue_staleness()
+    rev_warn = ' style="color:#c0392b;font-weight:600"' if rev_status.get("stale") else ""
 
-    # PATCH: Inject smoothed data into chart data JSON
-    cd_marker = 'var defined_cd='
-    cd_start = html.find(cd_marker)
-    if cd_start >= 0:
-        json_start = cd_start + len(cd_marker)
-        depth, i = 0, json_start; cd_end = -1
-        while i < len(html):
-            if html[i] == '{': depth += 1
-            elif html[i] == '}':
-                depth -= 1
-                if depth == 0: cd_end = i + 1; break
-            i += 1
-        if cd_end > json_start:
-            try:
-                cd = json.loads(html[json_start:cd_end])
-                for did, R in all_res.items():
-                    if did in cd:
-                        sm = R.get("smooth", {})
-                        sm_data = sm.get("smoothed", {})
-                        labels = cd[did].get("l", [])
-                        cd[did]["sm"] = [sm_data.get(m, 0) for m in labels]
-                        mth = sm.get("method", "raw"); win = sm.get("window", 0)
-                        cd[did]["sm_method"] = f"{mth}-{win}" if mth not in ("none","raw") else "raw"
-                        cd[did]["sm_corr"] = sm.get("fit_corr", 0)
-                html = html[:json_start] + json.dumps(cd) + html[cd_end:]
-                print(f"  Smoothed data injected for {len([d for d in all_res if d in cd])} devices")
-            except Exception as ex:
-                print(f"  [V3.2] WARN: Could not parse chart data: {ex}")
+    # Summary table rows
+    trows = ""
+    for s in sorted(summary, key=lambda x: -x["r_score"]):
+        res = all_res.get(s["id"],{})
+        st = res.get("stats")
+        if not st: continue
+        sig_colors = {"CRITICAL":"#c0392b","ELEVATED":"#e67e22","WATCH":"#f1c40f","NORMAL":"#27ae60"}
+        sc = sig_colors.get(s["signal"],"#888")
+        ec = res.get("modules",{}).get("enhanced_corr")
+        corr_str = f'{ec["best_rho"]:+.3f}{"*" if ec.get("significant") else ""}' if ec and ec.get("best_rho") else "\u2014"
+        trows += (f'<tr><td>{s["name"]}</td><td>{s["ticker"]}</td><td>{st["latest_month"]}</td>'
+                  f'<td>{fmt0(st["latest_value"])}</td><td>{st["z_score"]:+.2f}</td>'
+                  f'<td>{s["r_score"]}</td><td>{fmt(st.get("rate_per_m"),1) if st.get("rate_per_m") else "\u2014"}</td>'
+                  f'<td>{fmt(st.get("rate_per_10k"),2) if st.get("rate_per_10k") else "\u2014"}</td>'
+                  f'<td>{st["slope_6mo"]:+.1f}</td><td>{st["deaths_3mo"]}</td><td>{st["injuries_3mo"]}</td>'
+                  f'<td>{corr_str}</td>'
+                  f'<td style="color:{sc};font-weight:700">{s["signal"]}</td></tr>')
 
-    # PATCH: Generate + insert Case Studies tab
-    cs_html, cs_js_data, cs_js_init = generate_case_studies_html(all_res)
-    html = html.replace('</body>', cs_html + '\n</body>')
+    # Build chart data and company HTML
+    cd = {}  # chart data per device
+    company_html = {}
+    tab_ids = {}
+    for comp in COMPANIES:
+        tab_ids[comp] = comp.lower().replace(" ","_")
+        company_html[comp] = ""
 
-    # PATCH: Inject case study JS as separate script block
-    cs_script = '<script>\nvar cs_data=' + cs_js_data + ';\n' + cs_js_init + '\nwindow.addEventListener("load",function(){initCaseStudies();});\n</script>\n'
-    html = html.replace('</body>', cs_script + '</body>')
+    for did, res in all_res.items():
+        dev = res["device"]; st = res.get("stats"); batch = res.get("batch",{})
+        recv = res.get("recv",{}); sev = res.get("sev",{})
+        tk = dev["ticker"]; rk = dev.get("rev_key",tk)
+        all_r = res.get("modules",{})
 
-    try:
-        with open(html_path, "w") as f: f.write(html)
-        delta = len(html) - original_len
-        print(f"[V3.2] HTML patched: {html_path} (+{delta//1024}KB)")
-    except Exception as ex:
-        print(f"[V3.2] Could not write {html_path}: {ex}")
+        if not st: continue
+        months = st["months"]; vals = st["values"]
+
+        # Chart data
+        bm = [m for m,v in batch.items() if v is not None and v != False and
+              (v=="batch" or v=="recall_batch" or isinstance(v,dict))]
+        evts = PRODUCT_EVENTS.get(did,[])
+        # Rate per $M
+        rate_m_vals = []
+        for m in months:
+            yr,mo = m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"
+            qrev = QUARTERLY_REVENUE.get(rk,{}).get(q)
+            rate_m_vals.append(round(recv.get(m,0)/(qrev/3)*1e6,1) if qrev and qrev>0 else None)
+        # Rate per 10K
+        rate_10k_vals = []
+        for m in months:
+            yr,mo = m.split("-"); q=f"{yr}-Q{(int(mo)-1)//3+1}"
+            ib = INSTALLED_BASE_K.get(rk,{}).get(q)
+            rate_10k_vals.append(round(recv.get(m,0)/ib*10000,2) if ib and ib>0 else None)
+        # Severity data
+        death_vals = [sev.get("death",{}).get(m,0) for m in months]
+        injury_vals = [sev.get("injury",{}).get(m,0) for m in months]
+        malf_vals = [sev.get("malfunction",{}).get(m,0) for m in months]
+        # Z-score series
+        z_vals = []
+        for i in range(len(vals)):
+            window = vals[max(0,i-5):i+1]
+            if len(window)>=3:
+                mu=sum(window)/len(window); sd=math.sqrt(sum((v-mu)**2 for v in window)/len(window))
+                z_vals.append(round((vals[i]-mu)/sd,2) if sd>0 else 0)
+            else: z_vals.append(0)
+        # MA6
+        ma6_vals = [round(v,1) for v in st["ma6"].values()]
+        # Stock data
+        stk = STOCK_MONTHLY.get(tk,{})
+        stk_vals = [stk.get(m) for m in months]
+
+        cd[did] = {"l":months,"v":vals,"bm":bm,"evts":evts,"ma6":ma6_vals,
+                   "s1l":round(st["sigma1_lo"],1),"s1h":round(st["sigma1_hi"],1),
+                   "s2l":round(st["sigma2_lo"],1),"s2h":round(st["sigma2_hi"],1),
+                   "rm":rate_m_vals,"r10k":rate_10k_vals,
+                   "deaths":death_vals,"injuries":injury_vals,"malfs":malf_vals,
+                   "z":z_vals,"stk":stk_vals}
+
+        # Card HTML
+        sig_colors = {"CRITICAL":"#c0392b","ELEVATED":"#e67e22","WATCH":"#f1c40f","NORMAL":"#27ae60"}
+        sc = sig_colors.get(res["signal"],"#888")
+
+        card = f'<div class="card" data-company="{dev["company"]}" data-signal="{res["signal"]}" data-view="{"combined" if dev.get("is_combined") else "individual"}">'
+        card += f'<div class="ch"><span class="cn">{dev["name"]}</span><span class="cs" style="background:{sc}">{res["signal"]}</span></div>'
+        card += f'<div class="sg"><div class="si"><div class="sil">R-SCORE</div><div class="siv">{res.get("r_score",0)}</div></div>'
+        card += f'<div class="si"><div class="sil">Z-SCORE</div><div class="siv">{st["z_score"]:+.2f}</div></div>'
+        card += f'<div class="si"><div class="sil">REPORTS</div><div class="siv">{fmt0(st["latest_value"])}</div></div>'
+        card += f'<div class="si"><div class="sil">TREND</div><div class="siv">{st["slope_6mo"]:+.1f}</div></div></div>'
+
+        # Chart container
+        card += f'<div class="cc" id="cc-{did}">'
+        card += '<div class="cbtns">'
+        for btn_id, btn_label in [("reports","Reports"),("rate_m","Rate/$M"),("rate_10k","Rate/10K"),
+                                   ("severity","Severity"),("z","Z-Score"),("stock","Stock")]:
+            active = " active" if btn_id == "reports" else ""
+            card += f'<button class="cb{active}" data-v="{btn_id}">{btn_label}</button>'
+        card += '<button class="cb rst" data-v="reset">Reset Zoom</button></div>'
+        card += f'<div class="cdesc" id="cdesc-{did}"></div>'
+        card += f'<div class="cwrap"><canvas id="ch-{did}"></canvas></div></div>'
+
+        # Module accordions
+        acc_html = ""
+
+        # 1. Failure Modes
+        fm = all_r.get("failure_modes")
+        if fm and isinstance(fm,dict) and fm.get("status")=="ok":
+            top = fm.get("top_modes",[])
+            fm_stat = f'<span class="mstat">{fm.get("total",0)} analyzed</span>'
+            fm_content = '<div class="sg" style="grid-template-columns:repeat(3,1fr)">'
+            for t in top[:3]:
+                fm_content += f'<div class="si"><div class="sil">{t["mode"].upper()}</div><div class="siv">{t["count"]} ({t["pct"]}%)</div></div>'
+            fm_content += '</div>'
+            acc_html += _accordion(f"fm-{did}","Failure Mode Classification",fm_stat,fm_content)
+
+        # 2. ENHANCED CORRELATION (multi-signal)
+        ec = all_r.get("enhanced_corr")
+        if ec and isinstance(ec,dict) and ec.get("status")=="ok":
+            ec_rho = ec.get("best_rho",0); ec_sig = ec.get("significant",False)
+            ec_conf = ec.get("confidence",0)
+            if ec_sig and ec_rho<-0.2: ec_col="#c0392b"
+            elif ec_sig and ec_rho>0.2: ec_col="#e67e22"
+            else: ec_col="var(--tx3)"
+            conf_col="#27ae60" if ec_conf>=60 else "#f39c12" if ec_conf>=35 else "#c0392b"
+            ec_stat = f'<span class="mstat" style="color:{ec_col}">\u03C1={ec_rho:+.3f}</span>'
+            ec_stat += f' <span class="mstat" style="color:{conf_col};font-size:11px">[{ec_conf}/100]</span>'
+            ec_content = render_corr_accordion_content(ec, did)
+            acc_html += _accordion(f"corr-{did}","MAUDE-Stock Correlation (Multi-Signal)",ec_stat,ec_content)
+
+        # 3. Case Study Backtest
+        bt = all_r.get("backtest")
+        if bt and isinstance(bt,dict) and bt.get("status")=="ok":
+            bts = bt.get("summary",{})
+            grade = bts.get("grade","?"); hit = bts.get("hit_rate_pct",0)
+            gc_map = {"STRONG":"#27ae60","MODERATE":"#f39c12","WEAK":"#c0392b"}
+            gc = gc_map.get(grade,"#888")
+            bt_stat = f'<span class="mstat" style="color:{gc}">{grade} ({hit:.0f}%)</span>'
+            bt_content = render_case_study_html(bt, tk)
+            acc_html += _accordion(f"bt-{did}","Trade Signal Backtest (Case Studies)",bt_stat,bt_content)
+
+        # 4. Earnings Predictor
+        ep = all_r.get("earnings_pred")
+        if ep and isinstance(ep,dict) and ep.get("status")=="ok":
+            epo = ep.get("outlook","?"); eps_score = ep.get("score",50)
+            ep_col = "#27ae60" if epo=="POSITIVE" else "#c0392b" if epo=="NEGATIVE" else "#f39c12"
+            ep_stat = f'<span class="mstat" style="color:{ep_col}">{epo} ({eps_score})</span>'
+            ep_content = f'<div class="msub">{ep.get("message","")}</div>'
+            factors = ep.get("factors",[])
+            if factors:
+                ep_content += '<div style="font-size:11px;margin-top:6px">'
+                for fname,fval in factors:
+                    fc = "#c0392b" if fval<0 else "#27ae60"
+                    ep_content += f'<div style="padding:2px 0"><span style="color:{fc}">{fval:+d}</span> {fname}</div>'
+                ep_content += '</div>'
+            ep_content += '<div class="msub" style="font-size:10px;opacity:0.7;margin-top:6px">Heuristic scoring model, not ML-trained.</div>'
+            acc_html += _accordion(f"ep-{did}","Earnings Predictor (Heuristic)",ep_stat,ep_content)
+
+        # 5. Recall Probability
+        rp = all_r.get("recall_prob")
+        if rp and isinstance(rp,dict) and rp.get("status")=="ok":
+            rpl = rp.get("level","?"); rpp = rp.get("probability",0)
+            rp_col = "#c0392b" if rpl=="HIGH" else "#f39c12" if rpl=="MODERATE" else "#27ae60"
+            rp_stat = f'<span class="mstat" style="color:{rp_col}">{rpl} ({rpp})</span>'
+            acc_html += _accordion(f"rp-{did}","Recall Probability (Heuristic)",rp_stat,
+                                   f'<div class="msub">{rp.get("message","")}</div>')
+
+        # 6. Peer-Relative
+        pr = all_r.get("peer_relative")
+        if pr and isinstance(pr,dict):
+            prs = pr.get("signal","?")
+            prc = "#c0392b" if prs in ("WORST","WEAK") else "#27ae60" if prs in ("BEST","STRONG") else "var(--tx3)"
+            pr_stat = f'<span class="mstat" style="color:{prc}">{prs} ({pr.get("rank","?")}/{pr.get("total","?")})</span>'
+            pr_content = f'<div class="msub">{pr.get("message","")}</div>'
+            peers = pr.get("peers",[])
+            if peers:
+                pr_content += '<div style="font-size:11px;margin-top:6px">'
+                for ptk,pscore in peers:
+                    pw = "font-weight:600" if ptk==tk else ""
+                    pr_content += f'<div style="padding:2px 0;{pw}">{ptk}: R={pscore}</div>'
+                pr_content += '</div>'
+            acc_html += _accordion(f"pr-{did}","Peer-Relative Ranking",pr_stat,pr_content)
+
+        # 7. FDA Recalls
+        rc = all_r.get("recalls")
+        if rc and isinstance(rc,dict) and rc.get("status")=="ok" and rc.get("count",0)>0:
+            rc_stat = f'<span class="mstat">{rc["count"]} found</span>'
+            rc_content = '<div style="font-size:11px">'
+            for r in rc.get("recalls",[])[:3]:
+                rc_content += f'<div style="padding:3px 0;border-bottom:1px solid rgba(0,0,0,0.1)"><strong>{r.get("classification","")}</strong> ({r.get("status","")}) — {r.get("reason","")[:100]}</div>'
+            rc_content += '</div>'
+            acc_html += _accordion(f"rc-{did}","FDA Recalls (Live)",rc_stat,rc_content)
+
+        # 8. EDGAR
+        ed = all_r.get("edgar")
+        if ed and isinstance(ed,dict) and ed.get("status")=="ok":
+            acc_html += _accordion(f"ed-{did}","SEC Filing Activity",
+                f'<span class="mstat">{ed.get("total_90d",0)} (90d)</span>',
+                f'<div class="msub">{ed.get("message","")}</div>')
+
+        # 9. Insider Trading
+        ins = all_r.get("insider")
+        if ins and isinstance(ins,dict) and ins.get("status")=="ok":
+            acc_html += _accordion(f"ins-{did}","Insider Trading (Form 4)",
+                f'<span class="mstat">{ins.get("form4_count_90d",0)} filings</span>',
+                f'<div class="msub">{ins.get("message","")}</div>')
+
+        # 10. Clinical Trials
+        ct = all_r.get("trials")
+        if ct and isinstance(ct,dict) and ct.get("status")=="ok":
+            acc_html += _accordion(f"ct-{did}","Clinical Trials",
+                f'<span class="mstat">{ct.get("count",0)} active</span>',
+                f'<div class="msub">{ct.get("message","")}</div>')
+
+        # 11. Payer Coverage
+        pay = all_r.get("payer")
+        if pay and isinstance(pay,dict) and pay.get("status")=="ok":
+            acc_html += _accordion(f"pay-{did}","Payer Coverage",
+                f'<span class="mstat">Info</span>',
+                f'<div class="msub">{pay.get("message","")}</div>')
+
+        # Framework modules: only show if they have real data (not just stubs)
+        for mod_name, mod_label in [("google_trends","Google Trends"),("short_interest","Short Interest"),("international","International (MHRA)")]:
+            md = all_r.get(mod_name)
+            if md and isinstance(md,dict) and md.get("status") not in (None,"framework","skip","error"):
+                acc_html += _accordion(f"{mod_name}-{did}",mod_label,
+                    f'<span class="mstat">Data</span>',
+                    f'<div class="msub">{md.get("message","")}</div>')
+
+        card += f'<div class="mods">{acc_html}</div></div>'
+        company_html[dev["company"]] = company_html.get(dev["company"],"") + card
+
+    # ============================================================
+    # FULL HTML OUTPUT
+    # ============================================================
+    html = f'''<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MAUDE Monitor V3.2</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
+<style>
+:root{{--bg:#f8f9fa;--card:#fff;--tx1:#1a1a2e;--tx2:#444;--tx3:#888;--bdr:#e0e0e0;--acc:#f0f4f8}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--tx1);padding:12px;max-width:1400px;margin:0 auto}}
+h1{{font-size:1.5em;margin-bottom:4px}} h2{{font-size:1.2em;margin:16px 0 8px}}
+.hdr{{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:16px 20px;border-radius:12px;margin-bottom:16px}}
+.hdr small{{opacity:0.7;font-size:12px}} .hdr .warn{{color:#f39c12;font-size:11px}}
+.tabs{{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px;background:var(--card);padding:8px;border-radius:8px;border:1px solid var(--bdr)}}
+.tab{{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;border:none;background:transparent;color:var(--tx2)}}
+.tab:hover{{background:var(--acc)}} .tab.active{{background:#1a1a2e;color:#fff}}
+.tabcontent{{display:none}} .tabcontent.active{{display:block}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:16px}}
+.card{{background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}}
+.ch{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}}
+.cn{{font-weight:700;font-size:14px}} .cs{{padding:2px 8px;border-radius:4px;color:#fff;font-size:11px;font-weight:600}}
+.sg{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}}
+.si{{text-align:center;padding:4px;background:var(--acc);border-radius:6px}}
+.sil{{font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.5px}}
+.siv{{font-size:16px;font-weight:700;margin-top:2px}}
+.cc{{margin:8px 0}} .cbtns{{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}}
+.cb{{padding:3px 8px;border:1px solid var(--bdr);border-radius:4px;cursor:pointer;font-size:11px;background:var(--card)}}
+.cb:hover{{background:var(--acc)}} .cb.active{{background:#1a1a2e;color:#fff;border-color:#1a1a2e}}
+.cb.rst{{background:transparent;border-style:dashed;font-size:10px}}
+.cdesc{{font-size:11px;color:var(--tx3);margin-bottom:4px;min-height:14px}}
+.cwrap{{height:220px;position:relative}}
+.mods{{margin-top:10px}}
+.acc{{border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px;overflow:hidden}}
+.acch{{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;cursor:pointer;font-size:12px;font-weight:600;background:var(--acc)}}
+.acch:hover{{background:#e4e8ee}}
+.accb{{padding:10px;font-size:12px}}
+.arr{{font-size:10px;transition:transform 0.2s}} .arr.open{{transform:rotate(90deg)}}
+.mstat{{font-size:12px;font-weight:600;margin:0 8px}}
+.msub{{font-size:12px;color:var(--tx2);line-height:1.5;margin:4px 0}}
+.filters{{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px}}
+.filters select{{padding:4px 8px;border:1px solid var(--bdr);border-radius:4px;font-size:12px}}
+table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{padding:6px 8px;text-align:left;border-bottom:1px solid var(--bdr)}}
+th{{background:var(--acc);font-weight:600;font-size:11px;text-transform:uppercase}}
+.disc{{margin-top:20px;padding:12px;background:var(--acc);border-radius:8px;font-size:11px;color:var(--tx3);line-height:1.6}}
+.gi{{padding:8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px}}
+.gi h4{{font-size:12px;margin-bottom:4px}} .gi p{{font-size:11px;color:var(--tx2);line-height:1.4}}
+</style></head><body>
+<div class="hdr">
+<h1>MAUDE Monitor V3.2 \u2014 Medical Device Adverse Event Intelligence</h1>
+<small>Updated: {now} | Stock data: {_stock_source} | {len(DEVICES)} products tracked</small><br>
+<small{rev_warn}>Revenue data: {rev_status["message"]} (last updated {REVENUE_LAST_UPDATED})</small>
+</div>
+<div class="tabs">
+<div class="tab active" onclick="showTab('overview')">Overview</div>
+<div class="tab" onclick="showTab('guide')">Guide</div>'''
+
+    for comp in COMPANIES:
+        tid = tab_ids[comp]
+        html += f'\n<div class="tab" onclick="showTab(\'{tid}\')">{comp}</div>'
+
+    html += f'''</div>
+<div class="tabcontent active" id="tc-overview">
+<div class="filters"><label>Company:</label><select id="fc" onchange="af()"><option value="all">All</option>'''
+    for c in COMPANIES: html += f'<option value="{c}">{c}</option>'
+    html += '''</select><label>Signal:</label><select id="fs" onchange="af()"><option value="all">All</option>
+<option value="CRITICAL">Critical</option><option value="ELEVATED">Elevated+</option>
+<option value="WATCH">Watch+</option></select>
+<label>View:</label><select id="fv" onchange="af()"><option value="all">All</option>
+<option value="combined">Company-Level</option><option value="individual">Products Only</option></select></div>
+<h2>All Products \u2014 Latest Month</h2>
+<div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Ticker</th><th>Month</th><th>Reports</th><th>Z-Score</th><th>R-Score</th><th>Rate/$M</th><th>Rate/10K</th><th>Trend</th><th>Deaths</th><th>Injuries</th><th>Corr</th><th>Signal</th></tr></thead><tbody>{trows}</tbody></table></div></div>'''
+
+    html += '''<div class="tabcontent" id="tc-guide">
+<h2>How to Read This Dashboard</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:8px">
+<div class="gi"><h4>R-Score (0-100)</h4><p>Composite risk score. 0=safe, 100=critical. Weights: Z-score (20), trend (20), deaths (20), injuries (20), rate (20). R\u226550=investigate, R\u226570=act.</p></div>
+<div class="gi"><h4>Z-Score</h4><p>Standard deviations from mean. Z\u22652=anomalous (95th percentile). Z\u22653=extreme. Negative=below average reporting.</p></div>
+<div class="gi"><h4>Rate/$M Revenue</h4><p>Reports per $M revenue. Normalizes for business size. RISING rate=quality deteriorating faster than revenue growth.</p></div>
+<div class="gi"><h4>Rate/10K Users</h4><p>Reports per 10K installed base. Most precise normalization. Sources: earnings calls, 10-K filings.</p></div>
+<div class="gi"><h4>6mo Trend (Slope)</h4><p>Linear regression slope of last 6 months. Positive=accelerating reports. +50 means ~50 more reports/month.</p></div>
+<div class="gi"><h4>Batch Detection</h4><p>Orange bars on charts. Original: received&gt;3x event count. NEW: recall-aware detection flags known recall batch windows (e.g. DXCM 700K receiver recall). Prevents false signals.</p></div>
+<div class="gi"><h4>Multi-Signal Correlation</h4><p>Tests 6 MAUDE signals (raw, delta, z-score, rate/$M, rate/10K, acceleration) against stock returns at 0-6mo lags. Confidence 0-100. Rate-normalized signals strip installed base growth noise.</p></div>
+<div class="gi"><h4>Case Study Backtest</h4><p>Shows specific trade signals: date, entry price, exit price, P&L. Grade (STRONG/MODERATE/WEAK) based on hit rate. Batch/recall months auto-excluded.</p></div>
+</div></div>'''
+
+    for comp in COMPANIES:
+        tid = tab_ids[comp]; ch = company_html.get(comp,"<p>No data.</p>")
+        html += f'\n<div class="tabcontent" id="tc-{tid}">{ch}</div>'
+
+    html += '\n<div class="disc">Research only. Not investment advice. MAUDE has 30-90 day reporting lag. Revenue/installed base manually updated (check header). Stock via yfinance when available. R-Score and Earnings Predictor are heuristic, not ML. Recall batch windows are manually curated. Correlation is not causation.</div></div>'
+
+    # JAVASCRIPT
+    js = r'''<script>
+var defined_cd=__CD__;var charts={};
+var chartDescs={"reports":"REPORTS + SIGMA BANDS: Bars = monthly MAUDE reports. Shaded bands = 1\u03C3/2\u03C3 bounds. Beyond 2\u03C3 = anomalous. Orange = batch/recall dump. Red = regulatory event. Line = 6mo moving average.","rate_m":"RATE PER $M REVENUE: Reports / monthly revenue. RISING rate = quality deteriorating faster than business growth. This metric predicted the PODD selloff 4-5 months early.","rate_10k":"RATE PER 10K USERS: Reports / installed base. Most precise normalization. New products with few users show HIGH rates (correct \u2014 that IS a high failure rate).","severity":"SEVERITY BREAKDOWN: Deaths (red), injuries (orange), malfunctions (yellow). Deaths weighted 10x in R-score. MAUDE-reported, not confirmed causal.","z":"Z-SCORE TREND: Monthly z-scores over time. Crossing +2 = anomalous. Sustained elevation = systemic issue. Useful for spotting when a product enters/exits a problem period.","stock":"STOCK OVERLAY: Green = stock price, Red = MAUDE count. Look for: MAUDE spikes (red UP) preceding stock declines (green DOWN) by 1-4 months. That lead time is your alpha window."};
+function showTab(id){document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active")});document.querySelectorAll(".tabcontent").forEach(function(t){t.classList.remove("active")});var ct=document.querySelector('.tab[onclick*="'+id+'"]');if(ct)ct.classList.add("active");var tc=document.getElementById("tc-"+id);if(tc)tc.classList.add("active");}
+function toggleAcc(id){var el=document.getElementById(id);var arr=document.getElementById("arr-"+id);if(el.style.display==="none"){el.style.display="block";if(arr)arr.classList.add("open");}else{el.style.display="none";if(arr)arr.classList.remove("open");}}
+function af(){var fc=document.getElementById("fc").value;var fs=document.getElementById("fs").value;var fv=document.getElementById("fv").value;var sigs={"all":[],"CRITICAL":["CRITICAL"],"ELEVATED":["CRITICAL","ELEVATED"],"WATCH":["CRITICAL","ELEVATED","WATCH"]};var allowed=sigs[fs]||[];document.querySelectorAll(".card").forEach(function(c){var comp=c.getAttribute("data-company");var sig=c.getAttribute("data-signal");var view=c.getAttribute("data-view");var show=true;if(fc!=="all"&&comp!==fc)show=false;if(fs!=="all"&&allowed.indexOf(sig)<0)show=false;if(fv!=="all"&&view!==fv)show=false;c.style.display=show?"":"none";});}
+function init(){for(var d in defined_cd){if(defined_cd.hasOwnProperty(d)){mk(d,defined_cd[d],"reports");}}document.querySelectorAll(".cc").forEach(function(cc){cc.querySelectorAll(".cb").forEach(function(btn){btn.addEventListener("click",function(){var mycc=this.parentNode;var did=mycc.id.replace("cc-","");var v=this.getAttribute("data-v");if(v==="reset"){if(charts[did])charts[did].resetZoom();return;}mycc.querySelectorAll(".cb:not(.rst)").forEach(function(s){s.classList.remove("active")});this.classList.add("active");var descEl=document.getElementById("cdesc-"+did);if(descEl&&chartDescs[v]){descEl.textContent=chartDescs[v];}mk(did,defined_cd[did],v);});});});}
+function mk(did,D,v){var ctx=document.getElementById("ch-"+did);if(!ctx)return;if(charts[did])charts[did].destroy();var ds=[],yL="",bm=D.bm||[],evts=D.evts||[];var evtMs=evts.map(function(e){return e.date;});
+if(v==="reports"){var bc=D.l.map(function(m,i){return bm.indexOf(m)>=0?"rgba(230,126,34,0.5)":evtMs.indexOf(m)>=0?"rgba(192,57,43,0.5)":"rgba(39,174,96,0.4)";});ds=[{type:"bar",label:"Reports",data:D.v,backgroundColor:bc,borderWidth:0,order:2},{type:"line",label:"6mo MA",data:D.ma6,borderColor:"#1a6b3a",borderWidth:2,pointRadius:0,fill:false,order:1}];yL="Reports";
+var ann={};ann["s1"]={type:"box",yMin:D.s1l,yMax:D.s1h,backgroundColor:"rgba(39,174,96,0.08)",borderWidth:0};ann["s2"]={type:"box",yMin:D.s2l,yMax:D.s2h,backgroundColor:"rgba(39,174,96,0.04)",borderWidth:0};
+}else if(v==="rate_m"){ds=[{type:"bar",label:"Rate/$M",data:D.rm,backgroundColor:"rgba(52,152,219,0.5)",borderWidth:0}];yL="Reports/$M";}
+else if(v==="rate_10k"){ds=[{type:"bar",label:"Rate/10K",data:D.r10k,backgroundColor:"rgba(155,89,182,0.5)",borderWidth:0}];yL="Reports/10K";}
+else if(v==="severity"){ds=[{type:"bar",label:"Deaths",data:D.deaths,backgroundColor:"rgba(192,57,43,0.7)",borderWidth:0},{type:"bar",label:"Injuries",data:D.injuries,backgroundColor:"rgba(230,126,34,0.6)",borderWidth:0},{type:"bar",label:"Malfunctions",data:D.malfs,backgroundColor:"rgba(241,196,15,0.5)",borderWidth:0}];yL="Count";}
+else if(v==="z"){ds=[{type:"line",label:"Z-Score",data:D.z,borderColor:"#2980b9",borderWidth:2,pointRadius:1,fill:false}];yL="Z-Score";var ann={};ann["z2"]={type:"line",yMin:2,yMax:2,borderColor:"rgba(192,57,43,0.5)",borderWidth:1,borderDash:[4,4]};ann["z0"]={type:"line",yMin:0,yMax:0,borderColor:"rgba(0,0,0,0.2)",borderWidth:1};}
+else if(v==="stock"){var sv=D.stk||[];ds=[{type:"line",label:"Stock $",data:sv,borderColor:"rgba(39,174,96,0.8)",borderWidth:2,pointRadius:0,fill:false,yAxisID:"y"},{type:"bar",label:"MAUDE",data:D.v,backgroundColor:"rgba(192,57,43,0.3)",borderWidth:0,yAxisID:"y2"}];yL="Stock Price ($)";}
+var opts={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:ds.length>1,position:"top",labels:{font:{size:10}}},zoom:{zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:"x"},pan:{enabled:true,mode:"x"}}},scales:{x:{ticks:{font:{size:9},maxRotation:45}},y:{title:{display:true,text:yL,font:{size:10}},ticks:{font:{size:9}}}}};
+if(v==="stock"){opts.scales["y2"]={position:"right",title:{display:true,text:"MAUDE Reports",font:{size:10}},grid:{display:false},ticks:{font:{size:9}}};}
+if(typeof ann!=="undefined"&&v==="reports"){opts.plugins.annotation={annotations:ann};}
+if(typeof ann!=="undefined"&&v==="z"){opts.plugins.annotation={annotations:ann};}
+charts[did]=new Chart(ctx,{data:{labels:D.l,datasets:ds},options:opts});}
+document.addEventListener("DOMContentLoaded",init);
+</script>'''
+
+    full_html = html + js + "</body></html>"
+    full_html = full_html.replace("__CD__", json.dumps(cd))
+    with open("docs/index.html","w") as f:
+        f.write(full_html)
+    print(f"\nDashboard written: docs/index.html ({len(full_html)//1024}KB)")
 
 # ============================================================
 # EMAIL ALERTS
 # ============================================================
 def send_alerts(summary):
-    to,fr,pw=os.environ.get("MAUDE_EMAIL_TO"),os.environ.get("MAUDE_EMAIL_FROM"),os.environ.get("MAUDE_SMTP_PASSWORD")
+    to = os.environ.get("MAUDE_EMAIL_TO")
+    fr = os.environ.get("MAUDE_EMAIL_FROM")
+    pw = os.environ.get("MAUDE_SMTP_PASSWORD")
     if not all([to,fr,pw]): return
-    fl=[s for s in summary if s["signal"] in ("ELEVATED","CRITICAL")]
+    fl = [s for s in summary if s["signal"] in ("ELEVATED","CRITICAL")]
     if not fl: return
-    body="MAUDE Monitor V3.2 Alert\n\n"
-    for s in fl: body+=f"  {s['name']} ({s['ticker']}): {s['signal']} | R={s['r_score']} | Z={s['z_score']:+.2f}\n"
-    msg=MIMEMultipart();msg["From"],msg["To"]=fr,to;msg["Subject"]=f"MAUDE Alert: {len(fl)} flagged"
+    body = "MAUDE Monitor V3.2 Alert\n\n"
+    for s in fl:
+        body += f"  {s['name']} ({s['ticker']}): {s['signal']} | R={s['r_score']} | Z={s['z_score']:+.2f}\n"
+    msg = MIMEMultipart()
+    msg["From"], msg["To"] = fr, to
+    msg["Subject"] = f"MAUDE Alert: {len(fl)} flagged"
     msg.attach(MIMEText(body,"plain"))
     try:
-        with smtplib.SMTP("smtp.gmail.com",587) as srv: srv.starttls();srv.login(fr,pw);srv.send_message(msg)
+        with smtplib.SMTP("smtp.gmail.com",587) as srv:
+            srv.starttls(); srv.login(fr,pw); srv.send_message(msg)
     except: pass
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    p=argparse.ArgumentParser();p.add_argument("--html",action="store_true");p.add_argument("--backfill",action="store_true");p.add_argument("--quick",action="store_true")
-    a=p.parse_args()
-    print(f"MAUDE Monitor V3.2 | {datetime.now():%Y-%m-%d %H:%M} | {len(DEVICES)} products | Modules: {'ALL (inline)' if HAS_MODULES else 'NONE'}")
-    r,s=run_pipeline(a.backfill,a.quick); generate_html(r,s); send_alerts(s)
+    p = argparse.ArgumentParser()
+    p.add_argument("--html", action="store_true")
+    p.add_argument("--backfill", action="store_true")
+    p.add_argument("--quick", action="store_true")
+    a = p.parse_args()
+    print(f"MAUDE Monitor V3.2 | {datetime.now():%Y-%m-%d %H:%M} | {len(DEVICES)} products | Modules: ALL (inline)")
+    r, s = run_pipeline(a.backfill, a.quick)
+    generate_html(r, s)
+    send_alerts(s)
     print(f"\nCOMPLETE | docs/index.html")
 
-if __name__=="__main__": main()
+if __name__ == "__main__":
+    main()
