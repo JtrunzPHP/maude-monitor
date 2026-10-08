@@ -36,12 +36,24 @@ def _encode(s):
     return s.replace(" ", "+").replace('"', "%22")
 
 
-def build_search(phrases, manufacturer=None, brand_field="device.brand_name"):
+def build_search(phrases, manufacturer=None, brand_field="device.brand_name",
+                 require_manufacturer=None):
     parts = [f'{brand_field}:"{p}"' for p in phrases]
     for m in (manufacturer or []):
         parts.append(f'device.manufacturer_d_name:"{m}"')
     inner = "+OR+".join(_encode(p) for p in parts)
-    return f"({inner})" if len(parts) > 1 else inner
+    search = f"({inner})" if len(parts) > 1 else inner
+    if require_manufacturer:
+        req = "+OR+".join(_encode(f'device.manufacturer_d_name:"{m}"')
+                          for m in require_manufacturer)
+        req = f"({req})" if len(require_manufacturer) > 1 else req
+        search = f"({search}+AND+{req})"
+    return search
+
+
+def device_search(device, field="device.brand_name"):
+    return build_search(device["phrases"], device.get("manufacturer"), field,
+                        device.get("require_manufacturer"))
 
 
 def api_get(url, retries=API_RETRIES):
@@ -109,7 +121,7 @@ def resolve_brand_field(device):
     if did in _field_cache:
         return _field_cache[did]
     for field in ("device.brand_name", "brand_name"):
-        search = build_search(device["phrases"], device.get("manufacturer"), field)
+        search = device_search(device, field)
         url = f"{BASE_EVENT}?search={search}&limit=1"
         data = api_get(url, retries=1)
         time.sleep(API_SLEEP)
@@ -122,7 +134,7 @@ def resolve_brand_field(device):
 
 def fetch_counts(device, date_field, start):
     field = resolve_brand_field(device)
-    search = build_search(device["phrases"], device.get("manufacturer"), field)
+    search = device_search(device, field)
     url = (f"{BASE_EVENT}?search={search}+AND+{date_field}:[{start}+TO+now]"
            f"&count={date_field}")
     data = api_get(url)
@@ -148,7 +160,7 @@ def fetch_product_code_counts(device, date_field, start):
 
 def fetch_severity(device, start):
     field = resolve_brand_field(device)
-    search = build_search(device["phrases"], device.get("manufacturer"), field)
+    search = device_search(device, field)
     sev = {"death": {}, "injury": {}, "malfunction": {}}
     for et in sev:
         url = (f"{BASE_EVENT}?search={search}+AND+event_type:{et}"
@@ -163,7 +175,7 @@ def fetch_severity(device, start):
 def fetch_narratives(device, start, max_reports=MAX_NARRATIVES):
     """Paginated MDR narrative pull, newest first."""
     field = resolve_brand_field(device)
-    search = build_search(device["phrases"], device.get("manufacturer"), field)
+    search = device_search(device, field)
     texts = []
     skip = 0
     while skip < max_reports:
@@ -196,6 +208,10 @@ FAILURE_KEYWORDS = {
     "software": ["software", "app", "crash", "freeze", "update", "glitch", "display"],
     "insertion": ["insert", "needle", "pain", "bleed", "bruis", "applicat"],
     "occlusion": ["occlus", "block", "clog", "no deliv", "no insulin"],
+    # cardiac ablation / PFA complications (Abbott Volt)
+    "ablation_complication": ["tamponade", "perforat", "stroke", "phrenic", "esophag",
+                              "hemolysis", "haemolysis", "vasospasm", "coronary spasm",
+                              "pericardial", "effusion", "embol"],
 }
 
 
@@ -261,7 +277,7 @@ def discover(device, start):
     """Print what a device's query actually matches: top exact brand names
     and product codes with counts. Use this to tune phrases / pin codes."""
     field = resolve_brand_field(device)
-    search = build_search(device["phrases"], device.get("manufacturer"), field)
+    search = device_search(device, field)
     print(f"\n{device['name']} ({device['id']}) via {field}")
     for count_field, label in (("device.brand_name.exact", "Brand names"),
                                ("device.device_report_product_code", "Product codes"),
