@@ -287,57 +287,67 @@ def severity_weighted(sev, months):
                        f"3mo change {chg:+.1f}%. {lev}."}
 
 
-def r_score(stats):
-    """Composite 0-100 risk score. Same rubric shape as V3 but driven by
-    the trend-adjusted z so installed-base growth alone no longer scores."""
+def _tier(value, tiers):
+    """tiers: list of (threshold, points, label) descending; first match wins."""
+    for thr, pts, label in tiers:
+        if value >= thr:
+            return pts, label
+    return 0, "below the lowest threshold"
+
+
+def r_score_detail(stats):
+    """Composite 0-100 risk score with a full point breakdown. Driven by the
+    trend-adjusted z so installed-base growth alone no longer scores.
+    Each factor contributes 0-20 points; five factors, capped at 100."""
     if not stats:
         return None
-    s = 0
+    comps = []
+
     z = abs(stats["z_score_adj"])
-    if z >= 3:
-        s += 20
-    elif z >= 2:
-        s += 15
-    elif z >= 1.5:
-        s += 10
-    elif z >= 1:
-        s += 5
+    pts, lab = _tier(z, [(3, 20, "|z| >= 3"), (2, 15, "|z| >= 2"),
+                         (1.5, 10, "|z| >= 1.5"), (1, 5, "|z| >= 1")])
+    comps.append({"factor": "Trend-adjusted z-score (latest month vs own trend)",
+                  "value": f"{stats['z_score_adj']:+.2f}", "points": pts, "rule": lab,
+                  "scale": "3+ = 20, 2+ = 15, 1.5+ = 10, 1+ = 5"})
+
     sl = stats["slope_6mo"]
-    if sl > 100:
-        s += 20
-    elif sl > 50:
-        s += 15
-    elif sl > 20:
-        s += 10
-    elif sl > 0:
-        s += 5
+    pts, lab = _tier(sl, [(100.0001, 20, "slope > 100/mo"), (50.0001, 15, "slope > 50/mo"),
+                          (20.0001, 10, "slope > 20/mo"), (0.0001, 5, "slope > 0")])
+    comps.append({"factor": "6-month trend slope (reports per month, per month)",
+                  "value": f"{sl:+.1f}", "points": pts, "rule": lab,
+                  "scale": ">100 = 20, >50 = 15, >20 = 10, >0 = 5"})
+
     d = stats["deaths_3mo"]
-    if d >= 5:
-        s += 20
-    elif d >= 2:
-        s += 15
-    elif d >= 1:
-        s += 10
+    pts, lab = _tier(d, [(5, 20, "5+ deaths"), (2, 15, "2-4 deaths"), (1, 10, "1 death")])
+    comps.append({"factor": "Deaths reported, last 3 months", "value": f"{d}",
+                  "points": pts, "rule": lab, "scale": "5+ = 20, 2-4 = 15, 1 = 10"})
+
     inj = stats["injuries_3mo"]
-    if inj >= 50:
-        s += 20
-    elif inj >= 20:
-        s += 15
-    elif inj >= 5:
-        s += 10
-    elif inj >= 1:
-        s += 5
+    pts, lab = _tier(inj, [(50, 20, "50+ injuries"), (20, 15, "20-49"), (5, 10, "5-19"),
+                           (1, 5, "1-4")])
+    comps.append({"factor": "Injuries reported, last 3 months", "value": f"{inj:,}",
+                  "points": pts, "rule": lab, "scale": "50+ = 20, 20+ = 15, 5+ = 10, 1+ = 5"})
+
     rpm = stats.get("rate_per_m")
     if rpm:
-        if rpm > 500:
-            s += 20
-        elif rpm > 200:
-            s += 15
-        elif rpm > 100:
-            s += 10
-        elif rpm > 50:
-            s += 5
-    return min(100, s)
+        pts, lab = _tier(rpm, [(500.0001, 20, "> 500 per $M"), (200.0001, 15, "> 200 per $M"),
+                               (100.0001, 10, "> 100 per $M"), (50.0001, 5, "> 50 per $M")])
+        comps.append({"factor": "Reports per $M quarterly revenue (unverified inputs)",
+                      "value": f"{rpm:,.1f}", "points": pts, "rule": lab,
+                      "scale": ">500 = 20, >200 = 15, >100 = 10, >50 = 5"})
+    else:
+        comps.append({"factor": "Reports per $M quarterly revenue", "value": "n/a",
+                      "points": 0, "rule": "no revenue figure for this month's quarter",
+                      "scale": ">500 = 20, >200 = 15, >100 = 10, >50 = 5"})
+
+    total = min(100, sum(c["points"] for c in comps))
+    return {"score": total, "components": comps,
+            "thresholds": "CRITICAL 70+, ELEVATED 50-69, WATCH 30-49, NORMAL below 30"}
+
+
+def r_score(stats):
+    d = r_score_detail(stats)
+    return None if d is None else d["score"]
 
 
 def signal_from_r(rscore):
