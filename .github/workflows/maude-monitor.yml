@@ -1,0 +1,54 @@
+name: MAUDE Monitor V4
+
+on:
+  schedule:
+    - cron: "30 10 * * 1-5"   # 10:30 UTC weekdays = 6:30am ET (5:30 during EDT shifts; adjust to taste)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        default: "standard"
+        type: choice
+        options: [standard, quick]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: maude-monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run monitor
+        env:
+          OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
+          EDGAR_CONTACT: ${{ secrets.EDGAR_CONTACT }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          ALERT_TO: ${{ secrets.ALERT_TO }}
+          ALERT_FROM: ${{ secrets.ALERT_FROM }}
+        run: python maude_monitor.py --mode "${{ github.event.inputs.mode || 'standard' }}"
+
+      - name: Commit dashboard and data
+        run: |
+          git config user.name "maude-monitor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/ data/
+          git diff --cached --quiet || git commit -m "MAUDE Monitor run $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
