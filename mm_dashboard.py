@@ -18,6 +18,7 @@ def _device_payload(did, res):
     out = {"id": did, "name": dev["name"], "company": dev["company"],
            "ticker": dev["ticker"], "combined": dev["is_combined"],
            "signal": res["signal"], "r": res.get("r_score"),
+           "r_detail": res.get("r_detail"),
            "new_since": res.get("new_since_last_run"),
            "changed_months": res.get("changed_months", []),
            "rev_verified": res.get("rev_verified", False),
@@ -194,6 +195,21 @@ details>summary .mstat{margin-left:auto;font-weight:600;font-size:12px}
 .pos{color:var(--norm)} .neg{color:var(--crit)} .warnc{color:var(--elev)}
 .minor{color:var(--tx3)}
 footer{color:var(--tx3);font-size:11.5px;margin-top:28px;line-height:1.6}
+.key{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:0 0 12px;
+  font-size:12.5px;color:var(--tx2)}
+.key .pill{font-size:11px}
+details.guide{background:var(--panel);margin:0 0 16px}
+details.guide>summary{font-size:13.5px;color:var(--tx)}
+.guide .dbody{color:var(--tx2);line-height:1.55;max-width:860px}
+.guide h4{margin:12px 0 4px;font-size:13px;color:var(--tx)}
+.guide p{margin:0 0 6px}
+.guide dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:3px 12px}
+.guide dt{font-weight:600;color:var(--tx)}
+.guide dd{margin:0}
+[title]{cursor:help}
+.why td.pts{font-weight:650;text-align:right}
+.why tfoot td{font-weight:700;color:var(--tx)}
+.intro{margin:4px 0 6px;color:var(--tx3);font-size:11.5px}
 @media (max-width:640px){.cwrap{height:230px}.wrap{padding:12px 10px 40px}}
 </style>
 </head>
@@ -205,6 +221,8 @@ footer{color:var(--tx3);font-size:11.5px;margin-top:28px;line-height:1.6}
   <button id="themeBtn">Theme</button>
 </header>
 <div class="integrity" id="integrity"></div>
+<div class="key" id="key"></div>
+<details class="guide" id="guide"><summary>How to read this dashboard</summary><div class="dbody" id="guideBody"></div></details>
 <div class="filters" id="filters"></div>
 <table class="summary"><thead><tr id="sumHead"></tr></thead><tbody id="sumBody"></tbody></table>
 <div id="cards"></div>
@@ -263,6 +281,68 @@ $("#runMeta").textContent = `Run ${M.run_at} \u00b7 ${M.mode} \u00b7 since ${M.s
     `Latest month <b>${prov.stats.latest_month}</b> is provisional (MAUDE reporting lag)`));
 })();
 
+
+/* definitions used for tooltips, the guide, and the summary table */
+const DEFS = {
+  signal: "Overall risk level from the R-score: CRITICAL 70+, ELEVATED 50-69, WATCH 30-49, NORMAL below 30. Open a card's \"Why this signal\" panel to see the point breakdown.",
+  r: "R-score, 0-100. Five factors worth up to 20 points each: trend-adjusted z, 6-month slope, deaths (3mo), injuries (3mo), reports per $M revenue. Higher = more concerning.",
+  z_t: "Trend-adjusted z: how far the latest month sits above or below this device's own trailing growth trend, in standard deviations. +2 means roughly a 1-in-40 month relative to the trend. This is the primary anomaly score; it does not flag a device just for growing.",
+  z: "Raw trailing z: latest month vs the simple average of the prior 12 months. Rises with installed-base growth, so read it alongside the trend-adjusted z.",
+  latest: "Reports FDA received in the latest complete calendar month. The current in-progress month is excluded.",
+  new: "Change in total reports since the previous run of this monitor. Includes FDA backfilling older months, not only fresh events.",
+  rpm: "Reports per $1M of quarterly revenue. Dagger = the revenue figures have not yet been verified against filings; do not cite.",
+  r10k: "Reports per 10,000 installed-base users or systems. Dagger = installed-base figures not yet verified; do not cite.",
+  slope: "Slope of a straight line fit through the last 6 months of report counts: the average change in monthly reports, per month.",
+  deaths3: "Reports with event type Death in the last 3 complete months.",
+  inj3: "Reports with event type Injury in the last 3 complete months.",
+  rho: "Strongest Spearman rank correlation between a MAUDE signal and forward stock returns, across lags of 0-6 months. Negative at a positive lag means rising reports preceded falling prices. * = survives false-discovery correction (q < " + P.fdr_q + ").",
+  latest_month: "Latest complete calendar month in the data. (prov.) = provisional: MAUDE counts for the most recent month keep rising for weeks as late reports arrive.",
+  ticker: "Stock ticker used for price data and the CAR backtest.",
+  name: "Device or company row. Company rows combine all brand names for that company and drive the cross-company modules."
+};
+const TILE_DEFS = { "R-score": DEFS.r, "z trend-adj": DEFS.z_t, "z raw": DEFS.z,
+  "Reports": DEFS.latest, "6mo slope": DEFS.slope,
+  "Deaths / Inj 3mo": "Death and Injury event-type reports in the last 3 complete months.",
+  "Rate/10K": DEFS.r10k };
+
+/* signal key */
+(function(){
+  const k = $("#key");
+  k.appendChild(el("span", null, "Signal key (R-score):"));
+  [["CRITICAL","70+"],["ELEVATED","50-69"],["WATCH","30-49"],["NORMAL","below 30"]].forEach(([sg, r]) => {
+    const sp = el("span", null, `<span class="pill ${sg}">${sg}</span> ${r}`);
+    sp.title = DEFS.signal; k.appendChild(sp); });
+  k.appendChild(el("span", "minor", "\u2020 = built on unverified fundamentals \u00b7 * on a month = provisional \u00b7 hover any column or tile for its definition"));
+})();
+
+/* guide */
+$("#guideBody").innerHTML = `
+<p>This monitor pulls every adverse event report that device makers and users file with the FDA (the MAUDE database), counts them by month for each device we follow, and asks three questions: is the latest month unusual for this device, is the mix of events getting more serious, and has that pattern historically preceded a move in the stock?</p>
+<h4>What the signal means</h4>
+<p>Each device gets an R-score from 0 to 100 built from five factors, each worth up to 20 points: how far the latest month sits above the device's own trend, how steep the 6-month trend is, deaths in the last 3 months, injuries in the last 3 months, and reports per $M of revenue. CRITICAL is 70 or more, ELEVATED 50 to 69, WATCH 30 to 49, NORMAL below 30. Every card's first panel, "Why this signal", shows the exact points each factor earned and the rule it tripped, so nobody has to take the label on faith.</p>
+<h4>How to read a card</h4>
+<dl>
+<dt>Reports chart</dt><dd>Bars are monthly reports by the date FDA received them; the dark line is the 6-month moving average; the shaded band is one standard deviation around the device's clean-month mean. Grey shaded columns are batch-filing months, where the manufacturer dumped a backlog of summary reports at once; those months are shown but excluded from every statistic so they do not create false alarms. Dashed verticals are recalls, warning letters, and launches.</dd>
+<dt>Event-date view</dt><dd>The same reports counted by when the incident actually happened rather than when FDA received the paperwork. A big gap between the two in one month is how batch filings are detected.</dd>
+<dt>Z-scores view</dt><dd>Red line is the trend-adjusted z (the one that matters); grey is the raw z; the dashed line at 1.5 is the backtest trigger.</dd>
+<dt>Stock view</dt><dd>Reports against the share price so you can eyeball whether spikes led price moves. The CAR panel does this properly.</dd>
+</dl>
+<h4>The module panels</h4>
+<dl>
+<dt>Why this signal</dt><dd>Point-by-point breakdown of the R-score.</dd>
+<dt>CAR event study</dt><dd>Backtest: every past month the trend-adjusted z crossed 1.5 (or reports jumped 30%+ with z above 1) is treated as a short signal, and the stock's return over the next 3 months is measured against the IHI medtech ETF. Hit rate = share of signals where the stock lagged IHI. The 3-month horizon is fixed in advance so the result is not cherry-picked.</dd>
+<dt>MAUDE to stock correlation</dt><dd>Tests whether six versions of the report series (raw counts, changes, z-scores, acceleration, rates) correlate with stock returns 0 to 6 months later. Because that is roughly 40 tests, the p-values are corrected for multiple comparisons; only correlations with q below ${P.fdr_q} count as real.</dd>
+<dt>Recall cascade position</dt><dd>Where the device sits on the typical path from rising reports, to deaths, to warning letter, to recall, to Class I recall. Scored 0 to 100 from which steps have already happened.</dd>
+<dt>PRR disproportionality</dt><dd>The FDA's own pharmacovigilance measure. For each failure mode (sensor failure, adhesion, alarm, battery, etc.) it asks whether this device's narratives mention it far more often than the other monitored devices do. PRR of 2 means twice as often; with chi-squared above 4 that is a flag.</dd>
+<dt>Severity-weighted score</dt><dd>Deaths count 100, injuries 10, malfunctions 1, summed per month and z-scored, so a shift toward serious events shows even when total counts are flat.</dd>
+<dt>Cross-company ranking</dt><dd>Company rows ranked against each other on z, slope and (once verified) rate per 10K; rank 1 is the worst and is the short screen.</dd>
+<dt>Failure modes</dt><dd>Keyword classification of the most recent few hundred report narratives.</dd>
+<dt>Earnings setup and recall risk</dt><dd>Heuristic screening scores, labeled as such. They summarize the factors above into one number for triage; they are not calibrated probabilities.</dd>
+<dt>New since last run</dt><dd>How many reports appeared since the monitor last ran, with the months that changed.</dd>
+</dl>
+<h4>Caveats that matter</h4>
+<p>MAUDE reports are unverified submissions; a report does not establish that the device caused the event, and counts are not incidence rates. The newest month is always incomplete and is marked provisional. Metrics marked with a dagger rest on revenue and installed-base figures that have not yet been checked against filings and should not be quoted until they are. A run in quick mode only loads one year of history and will show "insufficient data" on the backtest and correlation modules; the standard run loads from January 2023.</p>`;
+
 /* filters */
 const state = { company: "All", signal: "All", view: "all" };
 (function(){
@@ -318,6 +398,7 @@ function renderSummary(){
   const head = $("#sumHead"); head.innerHTML = "";
   COLS.forEach(([k, label]) => {
     const th = el("th", null, esc(label) + (sortKey === k ? (sortDir < 0 ? " \u25be" : " \u25b4") : ""));
+    if (DEFS[k]) th.title = DEFS[k];
     th.onclick = () => { sortDir = (sortKey === k) ? -sortDir : -1; sortKey = k; renderSummary(); };
     head.appendChild(th);
   });
@@ -351,14 +432,45 @@ function renderSummary(){
 renderSummary();
 
 /* ----- module panels ----- */
-function panel(title, stat, statCls, bodyHtml){
-  return `<details><summary>${esc(title)}<span class="mstat ${statCls || ""}">${stat || ""}</span></summary><div class="dbody">${bodyHtml}</div></details>`;
+const DESC = {
+  "Why this signal": "How the R-score was built. Each row is one factor, the value observed, the rule it tripped, and the points earned.",
+  "CAR event study": "Backtest of past report spikes as short signals: stock return over the next 3 months minus the IHI medtech ETF return.",
+  "MAUDE \u2192 stock correlation": "Does any version of the report series correlate with stock returns 0 to 6 months later? Corrected for the ~40 tests run.",
+  "Recall cascade position": "How far along the typical path from rising reports to recall this device has progressed.",
+  "PRR disproportionality": "Which failure modes this device's narratives mention disproportionately vs the other monitored devices.",
+  "Severity-weighted score": "Deaths x100 + injuries x10 + malfunctions, per month, z-scored. Catches a shift toward serious events.",
+  "Cross-company ranking": "Company rows ranked against each other. Rank 1 is the worst (short screen).",
+  "Peer R-score rank": "Company rows ranked by R-score alone.",
+  "Failure modes": "Keyword classification of the most recent narratives into failure categories.",
+  "Earnings setup (heuristic)": "Triage score starting at 50, adjusted by the factors listed. Not a forecast.",
+  "Recall risk (heuristic)": "Triage score from z, deaths, slope, and alarm/sensor failure counts. Not a calibrated probability.",
+  "FDA recalls": "Recalls from the FDA device recall database matching this product.",
+  "New since last run": "Reports added since the monitor last ran, by month.",
+  "Company context": "SEC filing activity in the last 90 days, active clinical trials, and payer coverage notes."
+};
+function panel(title, stat, statCls, bodyHtml, open){
+  const key = Object.keys(DESC).find(k => title.indexOf(k) === 0);
+  const intro = key ? `<div class="intro">${DESC[key]}</div>` : "";
+  return `<details${open ? " open" : ""}><summary>${esc(title)}<span class="mstat ${statCls || ""}">${stat || ""}</span></summary><div class="dbody">${intro}${bodyHtml}</div></details>`;
+}
+function whyPanel(d){
+  const r = d.r_detail; if (!r) return "";
+  let b = `<table class="why"><tr><th>Factor</th><th>Value</th><th>Rule tripped</th><th>Scale</th><th>Pts</th></tr>`;
+  r.components.forEach(c => {
+    b += `<tr><td>${esc(c.factor)}</td><td>${esc(c.value)}</td><td>${esc(c.rule)}</td>` +
+         `<td class="minor">${esc(c.scale)}</td><td class="pts ${c.points >= 15 ? "neg" : c.points >= 10 ? "warnc" : ""}">${c.points}</td></tr>`;
+  });
+  b += `<tfoot><tr><td colspan="4">R-score (capped at 100) → <span class="sig ${d.signal}">${d.signal}</span></td><td class="pts">${r.score}</td></tr></tfoot></table>`;
+  b += `<div class="fine">${esc(r.thresholds)}. The z and slope factors use only this device's own history; deaths and injuries are absolute counts, so large-volume devices score higher on those two by construction.</div>`;
+  return panel("Why this signal", `${d.signal} · R ${r.score}`, "", b, true);
 }
 function gradeCls(g){ return g && g.indexOf("STRONG") === 0 ? "pos" : g === "MODERATE" ? "warnc" : "neg"; }
 function carPanel(d){
   const car = d.modules.car; if (!car) return "";
   if (car.status !== "ok") return panel("CAR event study", "insufficient data", "minor",
-    "<div>Not enough overlapping MAUDE and market history.</div>");
+    `<div>Needs at least 12 months where both report counts and ${esc(d.ticker)} prices exist. ` +
+    (M.mode === "quick" ? "This was a quick-mode run (history since " + esc(M.start_date) + "); run the workflow in standard mode to load history from 2023." :
+     "Either market data for this ticker is unavailable this run (see header) or the device has too little report history.") + `</div>`);
   const s = car.summary, h = car.primary_horizon;
   let b = `<div>${esc(s.message)}</div><table><tr><th>Date</th><th>Trigger</th><th>Entry</th>` +
           `<th>CAR ${esc(h)}</th><th>vs ${esc(M.benchmark_primary)}/${esc(M.benchmark_secondary)}</th><th>P&amp;L/$10K</th></tr>`;
@@ -392,7 +504,8 @@ function carPanel(d){
 function corrPanel(d){
   const c = d.modules.correlation; if (!c) return "";
   if (c.status !== "ok") return panel("MAUDE \u2192 stock correlation", "insufficient data", "minor",
-    `<div>${esc(c.message || "")}</div>`);
+    `<div>${esc(c.message || "")} Needs 14+ overlapping months of reports and prices. ` +
+    (M.mode === "quick" ? "Quick-mode run; use the standard run for full history." : "") + `</div>`);
   let b = `<div>${esc(c.message)}</div><table><tr><th>Signal</th><th>\u03c1</th><th>Lag</th><th>p</th><th>q (FDR)</th><th>Sig</th></tr>`;
   Object.entries(c.signal_analysis).forEach(([sn, s]) => {
     const cls = s.significant ? (s.best_rho < 0 ? "pos" : "neg") : "minor";
@@ -537,19 +650,19 @@ P.devices.forEach(d => {
   if (!s) { card.innerHTML = h + `<div class="vnote">No MAUDE data returned for this query (field tried: ${esc(d.brand_field)}).</div>`;
     cardsBox.appendChild(card); return; }
   h += `<div class="tiles">` +
-    `<div class="tile"><div class="tl">R-score</div><div class="tv">${d.r == null ? "\u2014" : d.r}</div></div>` +
-    `<div class="tile"><div class="tl">z trend-adj</div><div class="tv">${sgn(s.z_t)}</div></div>` +
-    `<div class="tile"><div class="tl">z raw</div><div class="tv">${sgn(s.z)}</div></div>` +
-    `<div class="tile"><div class="tl">Reports ${esc(s.latest_month)}${s.provisional ? " (prov.)" : ""}</div><div class="tv">${fmt0(s.latest_value)}</div></div>` +
-    `<div class="tile"><div class="tl">6mo slope</div><div class="tv">${sgn(s.slope)}</div></div>` +
-    `<div class="tile"><div class="tl">Deaths / Inj 3mo</div><div class="tv">${fmt0(s.deaths3)} / ${fmt0(s.inj3)}</div></div>` +
-    `<div class="tile"><div class="tl">Rate/10K\u2020</div><div class="tv">${fmt2(s.r10k)}${d.base_verified ? "" : " <small>unv.</small>"}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["R-score"])}"><div class="tl">R-score</div><div class="tv">${d.r == null ? "\u2014" : d.r}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["z trend-adj"])}"><div class="tl">z trend-adj</div><div class="tv">${sgn(s.z_t)}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["z raw"])}"><div class="tl">z raw</div><div class="tv">${sgn(s.z)}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["Reports"] + (s.provisional ? " " + DEFS.latest_month : ""))}"><div class="tl">Reports ${esc(s.latest_month)}${s.provisional ? " (prov.)" : ""}</div><div class="tv">${fmt0(s.latest_value)}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["6mo slope"])}"><div class="tl">6mo slope</div><div class="tv">${sgn(s.slope)}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["Deaths / Inj 3mo"])}"><div class="tl">Deaths / Inj 3mo</div><div class="tv">${fmt0(s.deaths3)} / ${fmt0(s.inj3)}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["Rate/10K"])}"><div class="tl">Rate/10K\u2020</div><div class="tv">${fmt2(s.r10k)}${d.base_verified ? "" : " <small>unv.</small>"}</div></div>` +
     `</div>`;
   h += `<div class="views">` + VIEWS.map(([v, l], i) =>
     `<button class="vb${i === 0 ? " on" : ""}" data-v="${v}">${l}</button>`).join("") +
     `<button class="vb" data-v="__reset">Reset zoom</button></div>`;
   h += `<div class="vnote" id="note-${d.id}"></div><div class="cwrap"><canvas id="cv-${d.id}"></canvas></div>`;
-  h += carPanel(d) + corrPanel(d) + cascadePanel(d) + prrPanel(d) + swPanel(d) +
+  h += whyPanel(d) + carPanel(d) + corrPanel(d) + cascadePanel(d) + prrPanel(d) + swPanel(d) +
        xcPanel(d) + peerPanel(d) + fmPanel(d) + epPanel(d) + rpPanel(d) +
        recallsPanel(d) + diffPanel(d) + contextPanel(d);
   card.innerHTML = h;
@@ -605,7 +718,7 @@ function baseOpts(){
               pan: { enabled: true, mode: "x" } }
     },
     scales: {
-      x: { ticks: { color: css("--tx3"), maxRotation: 45, font: { size: 10 } },
+      x: { type: "category", ticks: { color: css("--tx3"), maxRotation: 45, font: { size: 10 } },
            grid: { color: "transparent" } },
       y: { ticks: { color: css("--tx3"), font: { size: 10 } },
            grid: { color: css("--line") }, beginAtZero: true }
