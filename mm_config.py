@@ -64,6 +64,10 @@ ALERT_FROM = os.environ.get("ALERT_FROM", SMTP_USER)
 #                       product-code count series is pulled as a cross-check
 #                       and shown on the dashboard. Left empty by default:
 #                       populate from --discover output, not from guesses.
+# require_manufacturer -> optional; when set, the brand match is ANDed with
+#                       device.manufacturer_d_name phrases. Use it when a
+#                       brand word is generic (e.g. "volt") so other makers'
+#                       devices with the same word do not leak in.
 # is_combined        -> company-level row (drives peer/cross-company modules)
 DEVICES = [
     {"id": "DXCM_G7", "name": "Dexcom G7", "phrases": ["dexcom g7"], "manufacturer": [],
@@ -101,6 +105,13 @@ DEVICES = [
      "ticker": "PRCT", "rev_key": "PRCT", "company": "Procept", "is_combined": True, "product_codes": []},
     {"id": "CVRX_BAROSTIM", "name": "CVRx Barostim", "phrases": ["barostim"], "manufacturer": [],
      "ticker": "CVRX", "rev_key": "CVRX", "company": "CVRx", "is_combined": True, "product_codes": []},
+    # Abbott Volt PFA (pulsed field ablation). FDA approved 2025-12-22; US
+    # MAUDE history starts 2026, so stock-linked modules stay thin until the
+    # series reaches 14+ months.
+    {"id": "ABT_VOLT", "name": "Abbott Volt PFA", "phrases": ["volt pfa", "volt"],
+     "manufacturer": [], "require_manufacturer": ["abbott"],
+     "ticker": "ABT", "rev_key": "ABT_VOLT", "company": "Abbott", "is_combined": False,
+     "product_codes": []},
 ]
 
 COMPANIES = list(dict.fromkeys(d["company"] for d in DEVICES))
@@ -156,4 +167,5 @@ PRODUCT_EVENTS = {
                       {"date": "2024-10", "label": "Hydros System Launch", "type": "launch"}],
     "CVRX_BAROSTIM": [{"date": "2024-10", "label": "DRG 276 Reassignment", "type": "launch"},
                       {"date": "2026-01", "label": "Category I CPT Codes", "type": "launch"}],
+    "ABT_VOLT": [{"date": "2025-12", "label": "FDA Approval (Volt PFA)", "type": "launch"}],
 }
