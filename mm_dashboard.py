@@ -210,6 +210,13 @@ details.guide>summary{font-size:13.5px;color:var(--tx)}
 .why td.pts{font-weight:650;text-align:right}
 .why tfoot td{font-weight:700;color:var(--tx)}
 .intro{margin:4px 0 6px;color:var(--tx3);font-size:11.5px}
+.td{font-size:10px;color:var(--tx3);margin-top:2px;line-height:1.3}
+details>summary{flex-wrap:wrap}
+details>summary .sub{flex-basis:100%;font-weight:400;font-size:11.5px;color:var(--tx3);
+  padding-left:20px;margin-top:-2px}
+.plain{background:var(--panel2);border-left:3px solid var(--acc);border-radius:6px;
+  padding:9px 12px;margin:10px 0 4px;font-size:13px;line-height:1.5;color:var(--tx)}
+.plain b{font-weight:650}
 @media (max-width:640px){.cwrap{height:230px}.wrap{padding:12px 10px 40px}}
 </style>
 </head>
@@ -300,6 +307,10 @@ const DEFS = {
   ticker: "Stock ticker used for price data and the CAR backtest.",
   name: "Device or company row. Company rows combine all brand names for that company and drive the cross-company modules."
 };
+const TILE_SHORT = { "R-score": "0-100 risk composite", "z trend-adj": "latest month vs own trend, in sd",
+  "z raw": "latest month vs prior 12-mo avg", "Reports": "received by FDA this month",
+  "6mo slope": "change in monthly reports, per month", "Deaths / Inj 3mo": "event-type counts, last 3 months",
+  "Rate/10K": "reports per 10K installed base" };
 const TILE_DEFS = { "R-score": DEFS.r, "z trend-adj": DEFS.z_t, "z raw": DEFS.z,
   "Reports": DEFS.latest, "6mo slope": DEFS.slope,
   "Deaths / Inj 3mo": "Death and Injury event-type reports in the last 3 complete months.",
@@ -450,8 +461,27 @@ const DESC = {
 };
 function panel(title, stat, statCls, bodyHtml, open){
   const key = Object.keys(DESC).find(k => title.indexOf(k) === 0);
-  const intro = key ? `<div class="intro">${DESC[key]}</div>` : "";
-  return `<details${open ? " open" : ""}><summary>${esc(title)}<span class="mstat ${statCls || ""}">${stat || ""}</span></summary><div class="dbody">${intro}${bodyHtml}</div></details>`;
+  const sub = key ? `<span class="sub">${DESC[key]}</span>` : "";
+  return `<details${open ? " open" : ""}><summary>${esc(title)}<span class="mstat ${statCls || ""}">${stat || ""}</span>${sub}</summary><div class="dbody">${bodyHtml}</div></details>`;
+}
+function plainSummary(d){
+  const r = d.r_detail, s = d.stats; if (!r || !s) return "";
+  const hits = r.components.filter(c => c.points > 0);
+  const zeros = r.components.filter(c => c.points === 0);
+  const sigWord = { CRITICAL: "the highest alert level", ELEVATED: "elevated",
+    WATCH: "on watch", NORMAL: "normal" }[d.signal];
+  let t = `<b>${esc(d.name)} is ${d.signal}</b> (R-score ${r.score} of 100, ${sigWord}). `;
+  if (!hits.length) t += "None of the five risk factors tripped a threshold this month.";
+  else {
+    t += "Points came from " + hits.map(c => {
+      const f = c.factor.replace(" (unverified inputs)", "");
+      return `${f.charAt(0).toLowerCase() + f.slice(1)} at ${esc(c.value)} (${c.points} pts, rule: ${esc(c.rule)})`;
+    }).join("; ") + ".";
+  }
+  if (zeros.length) t += " Contributing nothing: " + zeros.map(c => c.factor.replace(" (unverified inputs)", "").toLowerCase()).join(", ") + ".";
+  if (s.provisional) t += ` The latest month (${esc(s.latest_month)}) is still filling in, so these readings can move.`;
+  if ((s.batch || []).length) t += ` ${s.batch.length} batch-filing month${s.batch.length > 1 ? "s were" : " was"} excluded from the statistics (grey columns on the chart).`;
+  return `<div class="plain">${t}</div>`;
 }
 function whyPanel(d){
   const r = d.r_detail; if (!r) return "";
@@ -650,19 +680,19 @@ P.devices.forEach(d => {
   if (!s) { card.innerHTML = h + `<div class="vnote">No MAUDE data returned for this query (field tried: ${esc(d.brand_field)}).</div>`;
     cardsBox.appendChild(card); return; }
   h += `<div class="tiles">` +
-    `<div class="tile" title="${esc(TILE_DEFS["R-score"])}"><div class="tl">R-score</div><div class="tv">${d.r == null ? "\u2014" : d.r}</div></div>` +
-    `<div class="tile" title="${esc(TILE_DEFS["z trend-adj"])}"><div class="tl">z trend-adj</div><div class="tv">${sgn(s.z_t)}</div></div>` +
-    `<div class="tile" title="${esc(TILE_DEFS["z raw"])}"><div class="tl">z raw</div><div class="tv">${sgn(s.z)}</div></div>` +
-    `<div class="tile" title="${esc(TILE_DEFS["Reports"] + (s.provisional ? " " + DEFS.latest_month : ""))}"><div class="tl">Reports ${esc(s.latest_month)}${s.provisional ? " (prov.)" : ""}</div><div class="tv">${fmt0(s.latest_value)}</div></div>` +
-    `<div class="tile" title="${esc(TILE_DEFS["6mo slope"])}"><div class="tl">6mo slope</div><div class="tv">${sgn(s.slope)}</div></div>` +
-    `<div class="tile" title="${esc(TILE_DEFS["Deaths / Inj 3mo"])}"><div class="tl">Deaths / Inj 3mo</div><div class="tv">${fmt0(s.deaths3)} / ${fmt0(s.inj3)}</div></div>` +
-    `<div class="tile" title="${esc(TILE_DEFS["Rate/10K"])}"><div class="tl">Rate/10K\u2020</div><div class="tv">${fmt2(s.r10k)}${d.base_verified ? "" : " <small>unv.</small>"}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["R-score"])}"><div class="tl">R-score</div><div class="tv">${d.r == null ? "\u2014" : d.r}</div><div class="td">${TILE_SHORT["R-score"]}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["z trend-adj"])}"><div class="tl">z trend-adj</div><div class="tv">${sgn(s.z_t)}</div><div class="td">${TILE_SHORT["z trend-adj"]}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["z raw"])}"><div class="tl">z raw</div><div class="tv">${sgn(s.z)}</div><div class="td">${TILE_SHORT["z raw"]}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["Reports"] + (s.provisional ? " " + DEFS.latest_month : ""))}"><div class="tl">Reports ${esc(s.latest_month)}${s.provisional ? " (prov.)" : ""}</div><div class="tv">${fmt0(s.latest_value)}</div><div class="td">${TILE_SHORT["Reports"]}${s.provisional ? ", still filling in" : ""}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["6mo slope"])}"><div class="tl">6mo slope</div><div class="tv">${sgn(s.slope)}</div><div class="td">${TILE_SHORT["6mo slope"]}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["Deaths / Inj 3mo"])}"><div class="tl">Deaths / Inj 3mo</div><div class="tv">${fmt0(s.deaths3)} / ${fmt0(s.inj3)}</div><div class="td">${TILE_SHORT["Deaths / Inj 3mo"]}</div></div>` +
+    `<div class="tile" title="${esc(TILE_DEFS["Rate/10K"])}"><div class="tl">Rate/10K\u2020</div><div class="tv">${fmt2(s.r10k)}${d.base_verified ? "" : " <small>unv.</small>"}</div><div class="td">${TILE_SHORT["Rate/10K"]}${d.base_verified ? "" : " (inputs unverified)"}</div></div>` +
     `</div>`;
   h += `<div class="views">` + VIEWS.map(([v, l], i) =>
     `<button class="vb${i === 0 ? " on" : ""}" data-v="${v}">${l}</button>`).join("") +
     `<button class="vb" data-v="__reset">Reset zoom</button></div>`;
   h += `<div class="vnote" id="note-${d.id}"></div><div class="cwrap"><canvas id="cv-${d.id}"></canvas></div>`;
-  h += whyPanel(d) + carPanel(d) + corrPanel(d) + cascadePanel(d) + prrPanel(d) + swPanel(d) +
+  h += plainSummary(d) + whyPanel(d) + carPanel(d) + corrPanel(d) + cascadePanel(d) + prrPanel(d) + swPanel(d) +
        xcPanel(d) + peerPanel(d) + fmPanel(d) + epPanel(d) + rpPanel(d) +
        recallsPanel(d) + diffPanel(d) + contextPanel(d);
   card.innerHTML = h;
