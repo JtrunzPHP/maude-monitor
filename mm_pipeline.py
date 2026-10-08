@@ -13,7 +13,7 @@ from mm_config import (DEVICES, PRIVATE_TICKERS, PRODUCT_EVENTS, API_SLEEP,
 from mm_fundamentals import (revenue_series, installed_base_series,
                              integrity_summary, revenue_staleness)
 from mm_stats import (build_device_stats, detect_batch, severity_weighted,
-                      r_score, signal_from_r)
+                      r_score, r_score_detail, signal_from_r)
 from mm_signals import (correlation_suite, prr_all, recall_cascade,
                         cross_company, peer_relative, recall_probability,
                         earnings_predictor)
@@ -146,9 +146,11 @@ def run_pipeline(mode="standard"):
                                       "slope": stats.get("slope_6mo", 0),
                                       "z": stats.get("z_score_adj", 0)}
 
-        rsc = r_score(stats) if stats else None
+        rdet = r_score_detail(stats) if stats else None
+        rsc = rdet["score"] if rdet else None
         sig = signal_from_r(rsc)
         all_res[did] = {"device": dev, "stats": stats, "r_score": rsc,
+                        "r_detail": rdet,
                         "signal": sig, "recv": recv, "evnt": evnt, "sev": sev,
                         "batch": batch, "events": events, "modules": modules,
                         "pc_counts": pc_counts,
