@@ -171,14 +171,27 @@ def trend_adjusted_z(values, exclude_idx=None, window=TREND_WINDOW):
     return out
 
 
+IMMATURE_MONTHS = 2   # newest months where the event-date series is still filling in
+
+
 def detect_batch(recv, evnt):
     """Months where date_received volume far exceeds date_of_event volume:
-    summary / retrospective batch filings, not fresh field events."""
+    summary / retrospective batch filings, not fresh field events.
+
+    The ratio test is NOT applied to the newest IMMATURE_MONTHS months: for
+    those, event-date counts are structurally low (events have not all been
+    filed yet) while receipts include lagged events from earlier months, so
+    the ratio trips for every device. Those months get None here and are
+    judged on volume (see `surge`) instead."""
     batch = {}
-    for m in recv:
+    months = sorted(recv)
+    mature = set(months[:-IMMATURE_MONTHS]) if len(months) > IMMATURE_MONTHS else set()
+    for m in months:
         rc = recv.get(m, 0)
         ec = evnt.get(m, 0)
-        if ec > 0 and rc > 2.5 * ec:
+        if m not in mature:
+            batch[m] = None
+        elif ec > 0 and rc > 2.5 * ec:
             batch[m] = "batch"
         elif ec > 0 and rc > 1.8 * ec and rc > 100:
             batch[m] = "mild_batch"
@@ -251,7 +264,8 @@ def build_device_stats(recv, evnt, sev, revenue, installed_base, batch,
     trail = sorted(vals[i] for i in range(max(0, n - 13), n - 1) if i not in batch_idx)
     med12 = trail[len(trail) // 2] if trail else None
     vs_med = round(lv / med12, 2) if med12 else None
-    surge = bool(vs_med and vs_med >= 4.0 and lv >= 50 and not batch.get(lm))
+    surge = bool(vs_med and vs_med >= 4.0 and lv >= 50)
+    small_base = bool((med12 is not None and med12 < 50) or lv < 100)
 
     # severity mix: deaths and injuries per 1,000 reports, last 3 months vs prior 12
     r3 = sum(vals[-3:])
@@ -285,7 +299,8 @@ def build_device_stats(recv, evnt, sev, revenue, installed_base, batch,
         "prev_month": months[-2] if n >= 2 else None, "prev_value": prev_v,
         "yago_month": months[-13] if n >= 13 else None, "yago_value": yago_v,
         "mom_pct": mom_pct, "yoy_pct": yoy_pct, "vs_median12": vs_med,
-        "median12": med12, "surge": surge,
+        "median12": med12, "surge": surge, "small_base": small_base,
+        "batch_test_immature": True,
         "deaths_per_k_3mo": dpk3, "deaths_per_k_base": dpk12,
         "inj_per_k_3mo": ipk3, "inj_per_k_base": ipk12,
         "reports_3mo": r3,
