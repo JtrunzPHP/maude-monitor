@@ -47,7 +47,7 @@ def _device_payload(did, res):
             "rpm": st["rate_per_m"], "r10k": st["rate_per_10k"],
             "batch": st["batch_months"],
             "mom": st.get("mom_pct"), "yoy": st.get("yoy_pct"), "vs_med": st.get("vs_median12"),
-            "surge": st.get("surge"), "prev_month": st.get("prev_month"), "yago_month": st.get("yago_month"),
+            "surge": st.get("surge"), "small_base": st.get("small_base"), "prev_month": st.get("prev_month"), "yago_month": st.get("yago_month"),
             "dpk3": st.get("deaths_per_k_3mo"), "dpk12": st.get("deaths_per_k_base"),
             "deaths": [sev.get("death", {}).get(m, 0) for m in months],
             "injuries": [sev.get("injury", {}).get(m, 0) for m in months],
@@ -493,7 +493,8 @@ function plainSummary(d){
   if (zeros.length) t += " Contributing nothing: " + zeros.map(c => c.factor.replace(" (unverified inputs)", "").toLowerCase()).join(", ") + ".";
   if (s.provisional) t += ` The latest month (${esc(s.latest_month)}) is still filling in, so these readings can move.`;
   if ((s.batch || []).length) t += ` ${s.batch.length} batch-filing month${s.batch.length > 1 ? "s were" : " was"} excluded from the statistics (grey columns on the chart).`;
-  if (s.surge) t += ` <b>Surge:</b> ${esc(s.latest_month)} ran ${s.vs_med.toFixed(1)}x the trailing 12-month median and event dates match receipt dates, so the batch test does not explain it; verify against the narratives and the recall record before reading it as a live incident wave.`;
+  if (s.surge) t += ` <b>Surge:</b> ${esc(s.latest_month)} ran ${s.vs_med.toFixed(1)}x the trailing 12-month median. The batch test cannot yet separate a bulk retrospective filing from live events for the newest month, so verify against the narratives and the recall record before reading it either way.`;
+  if (s.small_base) t += ` Small base: percentage moves exaggerate small absolute counts.`;
   if (d.next_earnings) t += ` Next ${esc(d.ticker)} earnings: ${esc(d.next_earnings)}.`;
   return `<div class="plain">${t}</div>`;
 }
@@ -794,7 +795,7 @@ function datasetsFor(d, view){
         backgroundColor: css("--acc") + "99", order: 5 },
       { type: "line", label: "6mo MA", data: s.ma6, borderColor: css("--tx2"),
         borderWidth: 1.5, pointRadius: 0, tension: .2, order: 1 }];
-    noteTxt = "Shaded columns = batch-reporting months (excluded from z baselines and backtests). Dashed verticals = events.";
+    noteTxt = "Shaded columns = batch-reporting months (excluded from z baselines and backtests); the newest two months are not tested because event dates are still filling in. Dashed verticals = events.";
   } else if (view === "eventdate") {
     sets = [
       { type: "bar", label: "Reports by event date", data: s.event_values,
