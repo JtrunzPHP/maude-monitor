@@ -12,6 +12,9 @@ import os
 from mm_config import OUTPUT_HTML, PAYLOAD_FILE, COMPANIES, FDR_Q
 
 
+meta_ref = {}
+
+
 def _device_payload(did, res):
     dev = res["device"]
     st = res.get("stats")
@@ -24,7 +27,9 @@ def _device_payload(did, res):
            "rev_verified": res.get("rev_verified", False),
            "base_verified": res.get("base_verified", False),
            "events": res.get("events", []),
-           "brand_field": res.get("brand_field", "")}
+           "brand_field": res.get("brand_field", ""),
+           "wow": res.get("wow_new_reports"),
+           "next_earnings": (meta_ref.get("next_earnings") or {}).get(dev["ticker"])}
     if st:
         months = st["months"]
         sev = res.get("sev", {})
@@ -41,6 +46,9 @@ def _device_payload(did, res):
             "deaths3": st["deaths_3mo"], "inj3": st["injuries_3mo"],
             "rpm": st["rate_per_m"], "r10k": st["rate_per_10k"],
             "batch": st["batch_months"],
+            "mom": st.get("mom_pct"), "yoy": st.get("yoy_pct"), "vs_med": st.get("vs_median12"),
+            "surge": st.get("surge"), "prev_month": st.get("prev_month"), "yago_month": st.get("yago_month"),
+            "dpk3": st.get("deaths_per_k_3mo"), "dpk12": st.get("deaths_per_k_base"),
             "deaths": [sev.get("death", {}).get(m, 0) for m in months],
             "injuries": [sev.get("injury", {}).get(m, 0) for m in months],
             "malfs": [sev.get("malfunction", {}).get(m, 0) for m in months],
@@ -63,6 +71,7 @@ def _device_payload(did, res):
 
 
 def build_payload(all_res, meta, stock_by_ticker):
+    meta_ref.clear(); meta_ref.update(meta)
     devices = []
     for did, res in all_res.items():
         if res.get("stats"):
@@ -307,7 +316,10 @@ const DEFS = {
   ticker: "Stock ticker used for price data and the CAR backtest.",
   name: "Device or company row. Company rows combine all brand names for that company and drive the cross-company modules."
 };
-const TILE_SHORT = { "R-score": "0-100 risk composite", "z trend-adj": "latest month vs own trend, in sd",
+const pct = v => v == null ? "\u2014" : (v >= 0 ? "+" : "") + Math.round(v) + "%";
+const TILE_SHORT = { "vs prior month": "latest complete month vs the one before", "vs year ago": "same month last year",
+  "Deaths/1k reports": "last 3 months vs prior 12 (size-adjusted severity)",
+  "R-score": "0-100 risk composite", "z trend-adj": "latest month vs own trend, in sd",
   "z raw": "latest month vs prior 12-mo avg", "Reports": "received by FDA this month",
   "6mo slope": "change in monthly reports, per month", "Deaths / Inj 3mo": "event-type counts, last 3 months",
   "Rate/10K": "reports per 10K installed base" };
@@ -481,6 +493,8 @@ function plainSummary(d){
   if (zeros.length) t += " Contributing nothing: " + zeros.map(c => c.factor.replace(" (unverified inputs)", "").toLowerCase()).join(", ") + ".";
   if (s.provisional) t += ` The latest month (${esc(s.latest_month)}) is still filling in, so these readings can move.`;
   if ((s.batch || []).length) t += ` ${s.batch.length} batch-filing month${s.batch.length > 1 ? "s were" : " was"} excluded from the statistics (grey columns on the chart).`;
+  if (s.surge) t += ` <b>Surge:</b> ${esc(s.latest_month)} ran ${s.vs_med.toFixed(1)}x the trailing 12-month median and event dates match receipt dates, so the batch test does not explain it; verify against the narratives and the recall record before reading it as a live incident wave.`;
+  if (d.next_earnings) t += ` Next ${esc(d.ticker)} earnings: ${esc(d.next_earnings)}.`;
   return `<div class="plain">${t}</div>`;
 }
 function whyPanel(d){
@@ -686,6 +700,9 @@ P.devices.forEach(d => {
     `<div class="tile" title="${esc(TILE_DEFS["Reports"] + (s.provisional ? " " + DEFS.latest_month : ""))}"><div class="tl">Reports ${esc(s.latest_month)}${s.provisional ? " (prov.)" : ""}</div><div class="tv">${fmt0(s.latest_value)}</div><div class="td">${TILE_SHORT["Reports"]}${s.provisional ? ", still filling in" : ""}</div></div>` +
     `<div class="tile" title="${esc(TILE_DEFS["6mo slope"])}"><div class="tl">6mo slope</div><div class="tv">${sgn(s.slope)}</div><div class="td">${TILE_SHORT["6mo slope"]}</div></div>` +
     `<div class="tile" title="${esc(TILE_DEFS["Deaths / Inj 3mo"])}"><div class="tl">Deaths / Inj 3mo</div><div class="tv">${fmt0(s.deaths3)} / ${fmt0(s.inj3)}</div><div class="td">${TILE_SHORT["Deaths / Inj 3mo"]}</div></div>` +
+    `<div class="tile" title="Percent change in reports, latest complete month vs the prior month."><div class="tl">vs prior month</div><div class="tv">${pct(s.mom)}</div><div class="td">${TILE_SHORT["vs prior month"]}</div></div>` +
+    `<div class="tile" title="Percent change in reports vs the same month one year earlier."><div class="tl">vs year ago</div><div class="tv">${pct(s.yoy)}</div><div class="td">${TILE_SHORT["vs year ago"]}</div></div>` +
+    `<div class="tile" title="Deaths per 1,000 reports: comparable across devices of different size."><div class="tl">Deaths/1k reports</div><div class="tv">${s.dpk3 == null ? "\u2014" : s.dpk3.toFixed(2)}<small> vs ${s.dpk12 == null ? "\u2014" : s.dpk12.toFixed(2)}</small></div><div class="td">${TILE_SHORT["Deaths/1k reports"]}</div></div>` +
     `<div class="tile" title="${esc(TILE_DEFS["Rate/10K"])}"><div class="tl">Rate/10K\u2020</div><div class="tv">${fmt2(s.r10k)}${d.base_verified ? "" : " <small>unv.</small>"}</div><div class="td">${TILE_SHORT["Rate/10K"]}${d.base_verified ? "" : " (inputs unverified)"}</div></div>` +
     `</div>`;
   h += `<div class="views">` + VIEWS.map(([v, l], i) =>
