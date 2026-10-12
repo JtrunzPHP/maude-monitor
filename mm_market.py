@@ -92,3 +92,34 @@ def fetch_benchmarks(primary="IHI", secondary="SPY"):
     return {"primary": {"ticker": primary, "series": bench.get(primary, {})},
             "secondary": {"ticker": secondary, "series": bench.get(secondary, {})},
             "notes": notes}
+
+
+def fetch_next_earnings(tickers):
+    """Next scheduled earnings date per ticker via yfinance, best effort.
+    Returns {ticker: 'YYYY-MM-DD' or None}."""
+    out = {}
+    try:
+        import yfinance as yf
+    except ImportError:
+        return {t: None for t in tickers}
+    today = datetime.now().date()
+    for tk in tickers:
+        nxt = None
+        try:
+            cal = yf.Ticker(tk).calendar
+            dates = []
+            if isinstance(cal, dict):
+                dates = cal.get("Earnings Date") or []
+            elif cal is not None and hasattr(cal, "loc") and "Earnings Date" in getattr(cal, "index", []):
+                row = cal.loc["Earnings Date"]
+                dates = list(row.values) if hasattr(row, "values") else [row]
+            for d in dates:
+                dd = d.date() if hasattr(d, "date") else d
+                if dd and dd >= today:
+                    nxt = dd.strftime("%Y-%m-%d")
+                    break
+        except Exception as e:
+            print(f"    earnings date {tk}: {str(e)[:60]}")
+        out[tk] = nxt
+        time.sleep(0.3)
+    return out
