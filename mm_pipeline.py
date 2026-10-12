@@ -173,12 +173,21 @@ def run_pipeline(mode="standard"):
             res["modules"]["peer_relative"] = pr.get(tk)
 
     # ---------- diffing + alerts ----------
+    fda_lu = fda.FDA_LAST_UPDATED["value"]
     prev_snap = alerts.load_previous_snapshot()
-    diffs = alerts.diff_snapshot(all_res, prev_snap)
-    alerts.write_snapshot(all_res)
+    week_snap = alerts.load_snapshot_days_ago(7)
+    diffs = alerts.diff_snapshot(all_res, prev_snap, week_snap)
+    alerts.write_snapshot(all_res, fda_lu)
+    data_refreshed = (prev_snap is None) or (fda_lu != prev_snap.get("fda_last_updated"))
+    print(f"\nFDA dataset last updated: {fda_lu} | new data since last run: "
+          f"{'yes' if data_refreshed else 'no'}")
     for did, d in diffs.items():
         all_res[did]["new_since_last_run"] = d["new_reports"]
         all_res[did]["changed_months"] = d["changed_months"]
+        all_res[did]["wow_new_reports"] = d.get("wow_new_reports")
+
+    print("\n=== Earnings calendar ===")
+    next_earn = market.fetch_next_earnings(tickers)
 
     prev_state = alerts.load_state()
     current_signals = {did: res["signal"] for did, res in all_res.items()}
@@ -200,6 +209,10 @@ def run_pipeline(mode="standard"):
                          "pct": integ["pct"]},
         "revenue_staleness": revenue_staleness(),
         "prev_run": (prev_snap or {}).get("run_at", ""),
+        "fda_last_updated": fda_lu,
+        "data_refreshed": data_refreshed,
+        "week_snapshot_date": (week_snap or {}).get("_file_date"),
+        "next_earnings": next_earn,
         "transitions": transitions,
         "alerts": {"sent": alert_result.get("sent", False),
                    "channels": alert_result.get("channels", [])},
