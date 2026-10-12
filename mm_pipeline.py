@@ -183,7 +183,7 @@ def run_pipeline(mode="standard"):
     prev_state = alerts.load_state()
     current_signals = {did: res["signal"] for did, res in all_res.items()}
     transitions = alerts.detect_transitions(prev_state, current_signals)
-    alert_result = alerts.send_alerts(transitions, diffs, all_res)
+    alert_result = alerts.send_alerts(transitions, diffs, all_res)   # Slack only
     alerts.save_state(current_signals)
 
     # ---------- run metadata ----------
@@ -204,6 +204,9 @@ def run_pipeline(mode="standard"):
         "alerts": {"sent": alert_result.get("sent", False),
                    "channels": alert_result.get("channels", [])},
     }
+
+    digest = alerts.send_digest(all_res, meta, diffs, transitions)
+    meta["digest"] = digest
 
     print("\n=== SUMMARY ===")
     for did, res in sorted(all_res.items(), key=lambda kv: -(kv[1]["r_score"] or 0)):
