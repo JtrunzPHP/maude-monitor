@@ -339,9 +339,17 @@ def _tier(value, tiers):
 
 
 def r_score_detail(stats):
-    """Composite 0-100 risk score with a full point breakdown. Driven by the
-    trend-adjusted z so installed-base growth alone no longer scores.
-    Each factor contributes 0-20 points; five factors, capped at 100."""
+    """Composite 0-100 risk score with a full point breakdown.
+
+    V4.2 rubric: every factor is RELATIVE to the device's own history, so
+    the score measures deterioration rather than size. Five factors, each
+    0-20 points, capped at 100:
+      1. trend-adjusted z of the latest month
+      2. 6-month slope as a percent of the device's recent run rate
+      3. deaths per 1,000 reports, last 3 months vs prior 12 (ratio)
+      4. injuries per 1,000 reports, last 3 months vs prior 12 (ratio)
+      5. latest month volume vs the trailing 12-month median (multiple)
+    """
     if not stats:
         return None
     comps = []
@@ -353,35 +361,49 @@ def r_score_detail(stats):
                   "value": f"{stats['z_score_adj']:+.2f}", "points": pts, "rule": lab,
                   "scale": "3+ = 20, 2+ = 15, 1.5+ = 10, 1+ = 5"})
 
-    sl = stats["slope_6mo"]
-    pts, lab = _tier(sl, [(100.0001, 20, "slope > 100/mo"), (50.0001, 15, "slope > 50/mo"),
-                          (20.0001, 10, "slope > 20/mo"), (0.0001, 5, "slope > 0")])
-    comps.append({"factor": "6-month trend slope (reports per month, per month)",
-                  "value": f"{sl:+.1f}", "points": pts, "rule": lab,
-                  "scale": ">100 = 20, >50 = 15, >20 = 10, >0 = 5"})
+    vals = stats["values"]
+    recent = vals[-6:] if len(vals) >= 6 else vals
+    run_rate = sum(recent) / len(recent) if recent else 0
+    rel_slope = (stats["slope_6mo"] / run_rate * 100) if run_rate > 0 else 0.0
+    pts, lab = _tier(rel_slope, [(15.0001, 20, "> 15%/mo"), (8.0001, 15, "> 8%/mo"),
+                                 (4.0001, 10, "> 4%/mo"), (1.0001, 5, "> 1%/mo")])
+    comps.append({"factor": "6-month trend slope, % of run rate per month",
+                  "value": f"{rel_slope:+.1f}%", "points": pts, "rule": lab,
+                  "scale": ">15% = 20, >8% = 15, >4% = 10, >1% = 5"})
 
-    d = stats["deaths_3mo"]
-    pts, lab = _tier(d, [(5, 20, "5+ deaths"), (2, 15, "2-4 deaths"), (1, 10, "1 death")])
-    comps.append({"factor": "Deaths reported, last 3 months", "value": f"{d}",
-                  "points": pts, "rule": lab, "scale": "5+ = 20, 2-4 = 15, 1 = 10"})
+    def ratio_factor(name, cur, base, count, min_count):
+        if cur is None or not base:
+            return {"factor": name, "value": "n/a", "points": 0,
+                    "rule": "no baseline", "scale": ">=2.5x = 20, >=1.75x = 15, >=1.25x = 10, >1x = 5"}
+        ratio = cur / base
+        pts, lab = _tier(ratio, [(2.5, 20, ">= 2.5x baseline"), (1.75, 15, ">= 1.75x baseline"),
+                                 (1.25, 10, ">= 1.25x baseline"), (1.0001, 5, "> baseline")])
+        if count < min_count and pts > 5:
+            pts, lab = 5, f"{lab}, capped (only {count} events)"
+        return {"factor": name, "value": f"{cur:.2f} vs {base:.2f} ({ratio:.2f}x)",
+                "points": pts, "rule": lab,
+                "scale": ">=2.5x = 20, >=1.75x = 15, >=1.25x = 10, >1x = 5"}
 
-    inj = stats["injuries_3mo"]
-    pts, lab = _tier(inj, [(50, 20, "50+ injuries"), (20, 15, "20-49"), (5, 10, "5-19"),
-                           (1, 5, "1-4")])
-    comps.append({"factor": "Injuries reported, last 3 months", "value": f"{inj:,}",
-                  "points": pts, "rule": lab, "scale": "50+ = 20, 20+ = 15, 5+ = 10, 1+ = 5"})
+    comps.append(ratio_factor("Deaths per 1,000 reports, last 3mo vs prior 12mo",
+                              stats.get("deaths_per_k_3mo"), stats.get("deaths_per_k_base"),
+                              stats.get("deaths_3mo", 0), 3))
+    comps.append(ratio_factor("Injuries per 1,000 reports, last 3mo vs prior 12mo",
+                              stats.get("inj_per_k_3mo"), stats.get("inj_per_k_base"),
+                              stats.get("injuries_3mo", 0), 10))
 
-    rpm = stats.get("rate_per_m")
-    if rpm:
-        pts, lab = _tier(rpm, [(500.0001, 20, "> 500 per $M"), (200.0001, 15, "> 200 per $M"),
-                               (100.0001, 10, "> 100 per $M"), (50.0001, 5, "> 50 per $M")])
-        comps.append({"factor": "Reports per $M quarterly revenue (unverified inputs)",
-                      "value": f"{rpm:,.1f}", "points": pts, "rule": lab,
-                      "scale": ">500 = 20, >200 = 15, >100 = 10, >50 = 5"})
+    vm = stats.get("vs_median12")
+    if vm is None:
+        comps.append({"factor": "Latest month volume vs trailing 12-month median", "value": "n/a",
+                      "points": 0, "rule": "insufficient history",
+                      "scale": ">=4x = 20, >=2.5x = 15, >=1.5x = 10, >=1.2x = 5"})
     else:
-        comps.append({"factor": "Reports per $M quarterly revenue", "value": "n/a",
-                      "points": 0, "rule": "no revenue figure for this month's quarter",
-                      "scale": ">500 = 20, >200 = 15, >100 = 10, >50 = 5"})
+        pts, lab = _tier(vm, [(4, 20, ">= 4x median"), (2.5, 15, ">= 2.5x median"),
+                              (1.5, 10, ">= 1.5x median"), (1.2, 5, ">= 1.2x median")])
+        if stats.get("small_base") and pts > 10:
+            pts, lab = 10, lab + ", capped (small base)"
+        comps.append({"factor": "Latest month volume vs trailing 12-month median",
+                      "value": f"{vm:.1f}x", "points": pts, "rule": lab,
+                      "scale": ">=4x = 20, >=2.5x = 15, >=1.5x = 10, >=1.2x = 5"})
 
     total = min(100, sum(c["points"] for c in comps))
     return {"score": total, "components": comps,
