@@ -178,9 +178,12 @@ def run_pipeline(mode="standard"):
     week_snap = alerts.load_snapshot_days_ago(7)
     diffs = alerts.diff_snapshot(all_res, prev_snap, week_snap)
     alerts.write_snapshot(all_res, fda_lu)
-    data_refreshed = (prev_snap is None) or (fda_lu != prev_snap.get("fda_last_updated"))
+    if prev_snap is None or prev_snap.get("fda_last_updated") is None:
+        data_refreshed = None      # no comparable prior run yet
+    else:
+        data_refreshed = fda_lu != prev_snap.get("fda_last_updated")
     print(f"\nFDA dataset last updated: {fda_lu} | new data since last run: "
-          f"{'yes' if data_refreshed else 'no'}")
+          f"{'unknown (tracking started)' if data_refreshed is None else 'yes' if data_refreshed else 'no'}")
     for did, d in diffs.items():
         all_res[did]["new_since_last_run"] = d["new_reports"]
         all_res[did]["changed_months"] = d["changed_months"]
