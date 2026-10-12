@@ -301,7 +301,7 @@ $("#runMeta").textContent = `Run ${M.run_at} \u00b7 ${M.mode} \u00b7 since ${M.s
 /* definitions used for tooltips, the guide, and the summary table */
 const DEFS = {
   signal: "Overall risk level from the R-score: CRITICAL 70+, ELEVATED 50-69, WATCH 30-49, NORMAL below 30. Open a card's \"Why this signal\" panel to see the point breakdown.",
-  r: "R-score, 0-100. Five factors worth up to 20 points each: trend-adjusted z, 6-month slope, deaths (3mo), injuries (3mo), reports per $M revenue. Higher = more concerning.",
+  r: "R-score, 0-100. Five factors worth up to 20 points each, all relative to the device's own history: trend-adjusted z, 6-month slope as % of run rate, deaths per 1,000 reports vs prior 12 months, injuries per 1,000 reports vs prior 12 months, and latest-month volume vs the 12-month median. Measures deterioration, not size.",
   z_t: "Trend-adjusted z: how far the latest month sits above or below this device's own trailing growth trend, in standard deviations. +2 means roughly a 1-in-40 month relative to the trend. This is the primary anomaly score; it does not flag a device just for growing.",
   z: "Raw trailing z: latest month vs the simple average of the prior 12 months. Rises with installed-base growth, so read it alongside the trend-adjusted z.",
   latest: "Reports FDA received in the latest complete calendar month. The current in-progress month is excluded.",
@@ -342,7 +342,7 @@ const TILE_DEFS = { "R-score": DEFS.r, "z trend-adj": DEFS.z_t, "z raw": DEFS.z,
 $("#guideBody").innerHTML = `
 <p>This monitor pulls every adverse event report that device makers and users file with the FDA (the MAUDE database), counts them by month for each device we follow, and asks three questions: is the latest month unusual for this device, is the mix of events getting more serious, and has that pattern historically preceded a move in the stock?</p>
 <h4>What the signal means</h4>
-<p>Each device gets an R-score from 0 to 100 built from five factors, each worth up to 20 points: how far the latest month sits above the device's own trend, how steep the 6-month trend is, deaths in the last 3 months, injuries in the last 3 months, and reports per $M of revenue. CRITICAL is 70 or more, ELEVATED 50 to 69, WATCH 30 to 49, NORMAL below 30. Every card's first panel, "Why this signal", shows the exact points each factor earned and the rule it tripped, so nobody has to take the label on faith.</p>
+<p>Each device gets an R-score from 0 to 100 built from five factors, each worth up to 20 points, and every factor is measured against the device's own history so the score captures deterioration rather than size: how far the latest month sits above the device's own trend; how steep the 6-month trend is as a percent of its run rate; deaths per 1,000 reports over the last 3 months versus the prior 12; injuries per 1,000 reports on the same basis; and latest-month volume versus the trailing 12-month median. CRITICAL is 70 or more, ELEVATED 50 to 69, WATCH 30 to 49, NORMAL below 30. Every card's first panel, "Why this signal", shows the exact points each factor earned and the rule it tripped, so nobody has to take the label on faith.</p>
 <h4>How to read a card</h4>
 <dl>
 <dt>Reports chart</dt><dd>Bars are monthly reports by the date FDA received them; the dark line is the 6-month moving average; the shaded band is one standard deviation around the device's clean-month mean. Grey shaded columns are batch-filing months, where the manufacturer dumped a backlog of summary reports at once; those months are shown but excluded from every statistic so they do not create false alarms. Dashed verticals are recalls, warning letters, and launches.</dd>
@@ -506,7 +506,7 @@ function whyPanel(d){
          `<td class="minor">${esc(c.scale)}</td><td class="pts ${c.points >= 15 ? "neg" : c.points >= 10 ? "warnc" : ""}">${c.points}</td></tr>`;
   });
   b += `<tfoot><tr><td colspan="4">R-score (capped at 100) → <span class="sig ${d.signal}">${d.signal}</span></td><td class="pts">${r.score}</td></tr></tfoot></table>`;
-  b += `<div class="fine">${esc(r.thresholds)}. The z and slope factors use only this device's own history; deaths and injuries are absolute counts, so large-volume devices score higher on those two by construction.</div>`;
+  b += `<div class="fine">${esc(r.thresholds)}. All five factors are relative to this device's own history, so a large device and a small one are scored on the same footing; death and injury rate factors are capped when the underlying event counts are tiny.</div>`;
   return panel("Why this signal", `${d.signal} · R ${r.score}`, "", b, true);
 }
 function gradeCls(g){ return g && g.indexOf("STRONG") === 0 ? "pos" : g === "MODERATE" ? "warnc" : "neg"; }
