@@ -185,12 +185,33 @@ def run_pipeline(mode="standard"):
     print(f"\nFDA dataset last updated: {fda_lu} | new data since last run: "
           f"{'unknown (tracking started)' if data_refreshed is None else 'yes' if data_refreshed else 'no'}")
     for did, d in diffs.items():
+        all_res[did]["prev_r"] = d.get("prev_r")
+        all_res[did]["prev_signal"] = d.get("prev_signal")
         all_res[did]["new_since_last_run"] = d["new_reports"]
         all_res[did]["changed_months"] = d["changed_months"]
         all_res[did]["wow_new_reports"] = d.get("wow_new_reports")
 
     print("\n=== Earnings calendar ===")
     next_earn = market.fetch_next_earnings(tickers)
+
+    # stock performance context: 1mo / 3mo, absolute and vs sector benchmark
+    def _perf(series, n):
+        ms = sorted(series)
+        if len(ms) <= n or not series.get(ms[-1]) or not series.get(ms[-1 - n]):
+            return None
+        return (series[ms[-1]] - series[ms[-1 - n]]) / series[ms[-1 - n]] * 100
+    stock_perf = {}
+    for tk in tickers:
+        sp = stock.get(tk, {})
+        if not sp:
+            continue
+        row = {}
+        for label, n in (("1mo", 1), ("3mo", 3)):
+            a = _perf(sp, n)
+            b = _perf(bench1, n)
+            row[label] = round(a, 1) if a is not None else None
+            row[label + "_rel"] = round(a - b, 1) if (a is not None and b is not None) else None
+        stock_perf[tk] = row
 
     prev_state = alerts.load_state()
     current_signals = {did: res["signal"] for did, res in all_res.items()}
@@ -216,6 +237,7 @@ def run_pipeline(mode="standard"):
         "data_refreshed": data_refreshed,
         "week_snapshot_date": (week_snap or {}).get("_file_date"),
         "next_earnings": next_earn,
+        "stock_perf": stock_perf,
         "transitions": transitions,
         "alerts": {"sent": alert_result.get("sent", False),
                    "channels": alert_result.get("channels", [])},
