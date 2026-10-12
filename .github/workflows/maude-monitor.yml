@@ -37,12 +37,16 @@ jobs:
           OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
           EDGAR_CONTACT: ${{ secrets.EDGAR_CONTACT }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM: ${{ secrets.RESEND_FROM }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           ALERT_TO: ${{ secrets.ALERT_TO }}
           ALERT_FROM: ${{ secrets.ALERT_FROM }}
+          DIGEST_MODE: ${{ secrets.DIGEST_MODE }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
         run: python maude_monitor.py --mode "${{ github.event.inputs.mode || 'standard' }}"
 
       - name: Commit dashboard and data
