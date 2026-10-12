@@ -259,6 +259,7 @@ def _row(did, res, diffs, meta):
             "yago_month": st.get("yago_month"), "yago_value": st.get("yago_value"),
             "mom": st.get("mom_pct"), "yoy": st.get("yoy_pct"), "vs_med": st.get("vs_median12"),
             "median12": st.get("median12"), "surge": st.get("surge"),
+            "small_base": st.get("small_base"),
             "batch": st["latest_month"] in (st.get("batch_months") or []),
             "dpk3": st.get("deaths_per_k_3mo"), "dpk12": st.get("deaths_per_k_base"),
             "ipk3": st.get("inj_per_k_3mo"), "ipk12": st.get("inj_per_k_base"),
@@ -288,12 +289,16 @@ def _plain(r, bench):
     if ctx:
         parts[0] += ", " + "; ".join(ctx)
     parts[0] += "."
+    if r["small_base"]:
+        parts.append("Small base: the percentages exaggerate what are small absolute counts.")
     if r["batch"]:
         parts.append("This month is flagged as a batch filing (reports received far exceed events that occurred), "
                      "so it reads as paperwork catching up rather than a new wave of incidents; it is excluded from the statistics.")
     elif r["surge"]:
-        parts.append("Event dates line up with receipt dates, so our batch test does NOT explain this; treat it as a live issue "
-                     "until the narratives and the company's recall record say otherwise.")
+        parts.append("The batch test cannot yet tell a retrospective filing from live events for the newest month "
+                     "(event dates are still filling in), so this is either a bulk filing, which usually follows a recall "
+                     "or corrective action, or a genuine wave of incidents. Both deserve a read of the narratives and "
+                     "the company's recall record before the next print.")
     if r["dpk3"] is not None and r["dpk12"]:
         direction = ("more severe" if r["dpk3"] > r["dpk12"] * 1.25 else
                      "less severe" if r["dpk3"] < r["dpk12"] * 0.75 else "about as severe")
@@ -363,7 +368,7 @@ def build_digest(all_res, meta, diffs, transitions):
     if n_rc: bits.append(f"{n_rc} new recall{'s' if n_rc > 1 else ''}")
     if n_sg: bits.append(f"{n_sg} surge{'s' if n_sg > 1 else ''}")
     if not bits: bits.append("no state changes")
-    prefix = "NEW FDA DATA" if refreshed else "no new FDA data"
+    prefix = ("tracking started" if refreshed is None else "NEW FDA DATA" if refreshed else "no new FDA data")
     subject = (f"MAUDE Monitor {datetime.now().strftime('%b %d')}: {prefix} | "
                + ", ".join(bits) + f" | {n_crit} critical")
 
@@ -380,11 +385,17 @@ def build_digest(all_res, meta, diffs, transitions):
              f'<div style="font-size:13px;opacity:.9;">{_esc(date_label)} &nbsp;&middot;&nbsp; '
              f'<a href="{DASHBOARD_URL}" style="color:#ffffff;text-decoration:underline;">Open the dashboard</a></div>'
              f'</td></tr>')
-    band_bg, band_tx = ("#e3f1e8", "#1f5c38") if refreshed else ("#f2f3f0", "#4a554e")
-    band = (f"New FDA data has arrived since the last run (dataset last updated {fda_lu}). Everything below reflects it."
-            if refreshed else
-            f"No new FDA data since the last run (dataset last updated {fda_lu}). The board is unchanged; "
-            f"FDA publishes MAUDE updates periodically rather than daily.")
+    if refreshed is None:
+        band_bg, band_tx = "#f2f3f0", "#4a554e"
+        band = (f"FDA dataset last updated {fda_lu}. Refresh tracking started with this run; from the next run "
+                f"this band will say whether FDA has published new data.")
+    elif refreshed:
+        band_bg, band_tx = "#e3f1e8", "#1f5c38"
+        band = f"New FDA data has arrived since the last run (dataset last updated {fda_lu}). Everything below reflects it."
+    else:
+        band_bg, band_tx = "#f2f3f0", "#4a554e"
+        band = (f"No new FDA data since the last run (dataset last updated {fda_lu}). The board is unchanged; "
+                f"FDA publishes MAUDE updates periodically rather than daily.")
     H.append(f'<tr><td style="background:{band_bg};color:{band_tx};padding:10px 24px;font-size:13px;">{_esc(band)}</td></tr>')
 
     def section(title):
