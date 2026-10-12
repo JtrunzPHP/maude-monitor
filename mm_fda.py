@@ -28,6 +28,7 @@ BASE_EVENT = "https://api.fda.gov/device/event.json"
 BASE_RECALL = "https://api.fda.gov/device/recall.json"
 
 _field_cache = {}   # device_id -> working brand field
+FDA_LAST_UPDATED = {"value": None}   # dataset last-updated date reported by the API
 
 
 def _encode(s):
@@ -65,6 +66,9 @@ def api_get(url, retries=API_RETRIES):
             req = Request(url, headers={"User-Agent": "MAUDE-Monitor/4.0"})
             with urlopen(req, timeout=API_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode())
+            lu = (data.get("meta") or {}).get("last_updated")
+            if lu:
+                FDA_LAST_UPDATED["value"] = lu
             if "error" in data:
                 err = data["error"]
                 code = err.get("code", "?")
