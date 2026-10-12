@@ -53,6 +53,15 @@ SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 ALERT_TO = [a.strip() for a in os.environ.get("ALERT_TO", "").split(",") if a.strip()]
 ALERT_FROM = os.environ.get("ALERT_FROM", SMTP_USER)
+# Resend (preferred; same key as the clinical-trials monitor). If set, the
+# digest goes out via Resend and SMTP is ignored. An unverified Resend
+# account can only deliver to the account owner's own address.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM = os.environ.get("RESEND_FROM") or "MAUDE Monitor <onboarding@resend.dev>"
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL") or "https://jtrunzphp.github.io/maude-monitor/"
+# "daily" = email after every run; "changes" = only when a signal moved,
+# a new recall appeared, or a device crossed the z trigger
+DIGEST_MODE = (os.environ.get("DIGEST_MODE") or "daily").strip().lower()
 
 # ----------------------------------------------------------------------
 # Device registry
