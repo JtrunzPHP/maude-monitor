@@ -346,9 +346,13 @@ def build_digest(all_res, meta, diffs, transitions):
 def _send_resend(subject, html, text):
     payload = json.dumps({"from": RESEND_FROM, "to": ALERT_TO, "subject": subject,
                           "html": html, "text": text}).encode()
-    req = Request("https://api.resend.com/emails", data=payload,
+    req = Request("https://api.resend.com/emails", data=payload, method="POST",
                   headers={"Authorization": f"Bearer {RESEND_API_KEY}",
-                           "Content-Type": "application/json"})
+                           "Content-Type": "application/json",
+                           "Accept": "application/json",
+                           # Resend is fronted by Cloudflare, which rejects
+                           # Python's default user agent (error 1010)
+                           "User-Agent": "Mozilla/5.0 (compatible; MAUDE-Monitor/4.0; +https://github.com/JtrunzPHP/maude-monitor)"})
     with urlopen(req, timeout=30) as resp:
         body = resp.read().decode()
     return body[:160]
