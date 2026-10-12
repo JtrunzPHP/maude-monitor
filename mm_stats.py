@@ -243,6 +243,27 @@ def build_device_stats(recv, evnt, sev, revenue, installed_base, batch,
         w = vals[max(0, i - 5):i + 1]
         ma6.append(round(sum(w) / len(w), 1))
 
+    # month-over-month / year-over-year / vs trailing-12 median
+    prev_v = vals[-2] if n >= 2 else None
+    yago_v = vals[-13] if n >= 13 else None
+    mom_pct = round((lv - prev_v) / prev_v * 100, 1) if prev_v else None
+    yoy_pct = round((lv - yago_v) / yago_v * 100, 1) if yago_v else None
+    trail = sorted(vals[i] for i in range(max(0, n - 13), n - 1) if i not in batch_idx)
+    med12 = trail[len(trail) // 2] if trail else None
+    vs_med = round(lv / med12, 2) if med12 else None
+    surge = bool(vs_med and vs_med >= 4.0 and lv >= 50 and not batch.get(lm))
+
+    # severity mix: deaths and injuries per 1,000 reports, last 3 months vs prior 12
+    r3 = sum(vals[-3:])
+    p12_months = months[-15:-3] if n >= 15 else months[:-3]
+    p12_reports = sum(recv[m] for m in p12_months)
+    d12 = sum(sev.get("death", {}).get(m, 0) for m in p12_months)
+    i12 = sum(sev.get("injury", {}).get(m, 0) for m in p12_months)
+    dpk3 = round(d3 / r3 * 1000, 2) if r3 else None
+    dpk12 = round(d12 / p12_reports * 1000, 2) if p12_reports else None
+    ipk3 = round(i3 / r3 * 1000, 1) if r3 else None
+    ipk12 = round(i12 / p12_reports * 1000, 1) if p12_reports else None
+
     return {
         "months": months, "values": vals,
         "event_values": [evnt.get(m, 0) for m in months],
@@ -261,6 +282,13 @@ def build_device_stats(recv, evnt, sev, revenue, installed_base, batch,
         "sigma2_lo": round(max(0, mean_val - 2 * std_val), 1),
         "sigma2_hi": round(mean_val + 2 * std_val, 1),
         "batch_months": [m for m in months if batch.get(m)],
+        "prev_month": months[-2] if n >= 2 else None, "prev_value": prev_v,
+        "yago_month": months[-13] if n >= 13 else None, "yago_value": yago_v,
+        "mom_pct": mom_pct, "yoy_pct": yoy_pct, "vs_median12": vs_med,
+        "median12": med12, "surge": surge,
+        "deaths_per_k_3mo": dpk3, "deaths_per_k_base": dpk12,
+        "inj_per_k_3mo": ipk3, "inj_per_k_base": ipk12,
+        "reports_3mo": r3,
     }
 
 
