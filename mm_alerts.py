@@ -14,7 +14,7 @@ when not configured.
 import json
 import os
 import smtplib
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from urllib.request import urlopen, Request
 
@@ -42,9 +42,37 @@ def load_previous_snapshot():
         return None
 
 
-def write_snapshot(all_res):
+def load_snapshot_days_ago(days=7, tolerance=3):
+    """Closest dated snapshot to `days` ago (within tolerance), or None."""
+    try:
+        files = [f for f in os.listdir(SNAPSHOT_DIR) if f.endswith(".json") and f != "latest.json"]
+    except Exception:
+        return None
+    target = datetime.now().date() - timedelta(days=days)
+    best, best_gap = None, None
+    for f in files:
+        try:
+            d = datetime.strptime(f[:-5], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        gap = abs((d - target).days)
+        if gap <= tolerance and (best_gap is None or gap < best_gap):
+            best, best_gap = f, gap
+    if not best:
+        return None
+    try:
+        with open(os.path.join(SNAPSHOT_DIR, best)) as fh:
+            snap = json.load(fh)
+        snap["_file_date"] = best[:-5]
+        return snap
+    except Exception:
+        return None
+
+
+def write_snapshot(all_res, fda_last_updated=None):
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-    snap = {"run_at": datetime.now().isoformat(timespec="seconds"), "devices": {}}
+    snap = {"run_at": datetime.now().isoformat(timespec="seconds"),
+            "fda_last_updated": fda_last_updated, "devices": {}}
     for did, res in all_res.items():
         recv = res.get("recv", {})
         recalls = (res.get("modules", {}).get("recalls") or {}).get("recalls", [])
@@ -70,12 +98,15 @@ def _prune_snapshots(keep=30):
         pass
 
 
-def diff_snapshot(all_res, prev):
-    """Returns {device_id: {new_reports, prev_run, changed_months}}."""
+def diff_snapshot(all_res, prev, week=None):
+    """Returns {device_id: {new_reports, prev_run, changed_months, new_recalls,
+    wow_new_reports, wow_date}}."""
     out = {}
     if not prev:
         return out
     pdev = prev.get("devices", {})
+    wdev = (week or {}).get("devices", {})
+    wdate = (week or {}).get("_file_date")
     for did, res in all_res.items():
         recv = res.get("recv", {})
         old = pdev.get(did)
@@ -92,8 +123,12 @@ def diff_snapshot(all_res, prev):
         recalls = (res.get("modules", {}).get("recalls") or {}).get("recalls", [])
         new_recalls = [r for r in recalls
                        if f"{r.get('initiated','')}|{r.get('reason','')[:40]}" not in prev_keys]
+        wow = None
+        if wdev.get(did):
+            wow = sum(recv.values()) - wdev[did].get("total", 0)
         out[did] = {"new_reports": new_total, "prev_run": prev.get("run_at", ""),
-                    "changed_months": changed[-6:], "new_recalls": new_recalls}
+                    "changed_months": changed[-6:], "new_recalls": new_recalls,
+                    "wow_new_reports": wow, "wow_date": wdate}
     return out
 
 
@@ -190,155 +225,283 @@ def _fmt_delta(v):
     return f"{v:+,}"
 
 
+def _pct(v):
+    if v is None:
+        return "n/a"
+    return f"{v:+.0f}%"
+
+
+def _mult(v):
+    return "n/a" if v is None else f"{v:.1f}x"
+
+
+def _mon(m):
+    try:
+        return datetime.strptime(m, "%Y-%m").strftime("%b %Y")
+    except Exception:
+        return m or ""
+
+
+def _row(did, res, diffs, meta):
+    st = res["stats"]
+    d = diffs.get(did, {})
+    car = (res.get("modules", {}).get("car") or {})
+    cs = car.get("summary", {}) if car.get("status") == "ok" else {}
+    tk = res["device"]["ticker"]
+    return {"id": did, "name": res["device"]["name"], "ticker": tk,
+            "signal": res["signal"], "r": res.get("r_score") or 0,
+            "z": st["z_score_adj"], "latest": st["latest_value"], "month": st["latest_month"],
+            "provisional": st["provisional"], "deaths3": st["deaths_3mo"], "inj3": st["injuries_3mo"],
+            "new": d.get("new_reports"), "wow": d.get("wow_new_reports"),
+            "new_recalls": d.get("new_recalls", []),
+            "combined": res["device"]["is_combined"], "detail": res.get("r_detail"),
+            "prev_month": st.get("prev_month"), "prev_value": st.get("prev_value"),
+            "yago_month": st.get("yago_month"), "yago_value": st.get("yago_value"),
+            "mom": st.get("mom_pct"), "yoy": st.get("yoy_pct"), "vs_med": st.get("vs_median12"),
+            "median12": st.get("median12"), "surge": st.get("surge"),
+            "batch": st["latest_month"] in (st.get("batch_months") or []),
+            "dpk3": st.get("deaths_per_k_3mo"), "dpk12": st.get("deaths_per_k_base"),
+            "ipk3": st.get("inj_per_k_3mo"), "ipk12": st.get("inj_per_k_base"),
+            "car_n": cs.get("total", 0), "car_hit": cs.get("hit_rate"), "car_mean": cs.get("mean_car"),
+            "car_grade": cs.get("grade"), "horizon": car.get("primary_horizon", "3mo"),
+            "earnings": (meta.get("next_earnings") or {}).get(tk)}
+
+
+def _history_line(r, bench):
+    if not r["car_n"] or r["car_n"] < 2 or r["car_hit"] is None:
+        return ""
+    return (f"When {r['name']} looked like this before ({r['car_n']} prior spikes), {r['ticker']} lagged "
+            f"{bench} over the following {r['horizon']} in {r['car_hit']:.0f}% of cases, average "
+            f"{r['car_mean']:+.1f}% vs {bench}.")
+
+
+def _plain(r, bench):
+    """One paragraph a PM can read cold."""
+    parts = [f"{r['name']} ({r['ticker']}): {r['latest']:,} reports in {_mon(r['month'])}"]
+    ctx = []
+    if r["prev_value"] is not None:
+        ctx.append(f"{_pct(r['mom'])} vs {_mon(r['prev_month'])} ({r['prev_value']:,})")
+    if r["yago_value"] is not None:
+        ctx.append(f"{_pct(r['yoy'])} vs {_mon(r['yago_month'])} ({r['yago_value']:,})")
+    if r["vs_med"] is not None:
+        ctx.append(f"{_mult(r['vs_med'])} the trailing 12-month median")
+    if ctx:
+        parts[0] += ", " + "; ".join(ctx)
+    parts[0] += "."
+    if r["batch"]:
+        parts.append("This month is flagged as a batch filing (reports received far exceed events that occurred), "
+                     "so it reads as paperwork catching up rather than a new wave of incidents; it is excluded from the statistics.")
+    elif r["surge"]:
+        parts.append("Event dates line up with receipt dates, so our batch test does NOT explain this; treat it as a live issue "
+                     "until the narratives and the company's recall record say otherwise.")
+    if r["dpk3"] is not None and r["dpk12"]:
+        direction = ("more severe" if r["dpk3"] > r["dpk12"] * 1.25 else
+                     "less severe" if r["dpk3"] < r["dpk12"] * 0.75 else "about as severe")
+        parts.append(f"Mix is {direction} than usual: {r['dpk3']:.2f} deaths per 1,000 reports over the last 3 months "
+                     f"vs {r['dpk12']:.2f} over the prior 12.")
+    elif r["deaths3"]:
+        parts.append(f"{r['deaths3']} deaths reported in the last 3 months.")
+    h = _history_line(r, bench)
+    if h:
+        parts.append(h)
+    if r["earnings"]:
+        parts.append(f"Next {r['ticker']} earnings: {r['earnings']}.")
+    return " ".join(parts)
+
+
 def build_digest(all_res, meta, diffs, transitions):
     """Returns (subject, html, text, noteworthy) for the digest email."""
     date_label = datetime.now().strftime("%a %b %d, %Y")
-    rows = []
-    for did, res in all_res.items():
-        st = res.get("stats")
-        if not st:
-            continue
-        d = diffs.get(did, {})
-        rows.append({"id": did, "name": res["device"]["name"], "ticker": res["device"]["ticker"],
-                     "signal": res["signal"], "r": res.get("r_score") or 0,
-                     "z": st["z_score_adj"], "latest": st["latest_value"],
-                     "month": st["latest_month"], "provisional": st["provisional"],
-                     "deaths3": st["deaths_3mo"], "inj3": st["injuries_3mo"],
-                     "new": d.get("new_reports"), "new_recalls": d.get("new_recalls", []),
-                     "combined": res["device"]["is_combined"],
-                     "detail": res.get("r_detail")})
+    bench = meta.get("benchmark_primary", "IHI")
+    refreshed = meta.get("data_refreshed")
+    fda_lu = meta.get("fda_last_updated") or "unknown"
+    rows = [_row(did, res, diffs, meta) for did, res in all_res.items() if res.get("stats")]
     order = {"CRITICAL": 0, "ELEVATED": 1, "WATCH": 2, "NORMAL": 3}
     rows.sort(key=lambda r: (order.get(r["signal"], 9), -r["r"]))
+    by_id = {r["id"]: r for r in rows}
 
-    # --- what changed ---
-    changes = []
-    for t in transitions:
-        name = all_res.get(t["device"], {}).get("device", {}).get("name", t["device"])
-        res = all_res.get(t["device"], {})
-        det = res.get("r_detail") or {}
-        hits = [c for c in det.get("components", []) if c["points"] > 0]
-        why = "; ".join(f"{(lambda f: f[0].lower() + f[1:])(c['factor'].split(' (')[0])} "
-                        f"{c['value']} ({c['points']} pts)" for c in hits[:3])
-        verb = "upgraded" if t["upgraded"] else "downgraded"
-        changes.append({"kind": "signal", "upgraded": t["upgraded"],
-                        "text": f"{name} {verb} from {t['from']} to {t['to']}"
-                                + (f". Drivers: {why}." if why else ".")})
+    # ---------- what matters today: ranked, deduped by device ----------
+    items = []
+    seen = set()
+    for t in sorted(transitions, key=lambda t: not t["upgraded"]):
+        r = by_id.get(t["device"])
+        if not r:
+            continue
+        verb = "UPGRADED" if t["upgraded"] else "downgraded"
+        items.append({"kind": "signal", "hot": t["upgraded"], "r": r,
+                      "head": f"{r['name']} {verb} {t['from']} \u2192 {t['to']} (R-score {r['r']})"})
+        seen.add(r["id"])
     for r in rows:
         for rc in r["new_recalls"]:
-            changes.append({"kind": "recall", "upgraded": True,
-                            "text": f"New FDA recall for {r['name']}: {rc.get('classification','')} "
-                                    f"initiated {rc.get('initiated','')}. {rc.get('reason','')}"})
-    zcross = [r for r in rows if r["z"] >= 1.5 and not any(
-        t["device"] == r["id"] for t in transitions)]
-    movers = sorted([r for r in rows if r["new"]], key=lambda r: -abs(r["new"]))[:5]
-    noteworthy = bool(changes) or bool(zcross)
+            items.append({"kind": "recall", "hot": True, "r": r,
+                          "head": f"New FDA recall: {r['name']} \u2014 {rc.get('classification','')} initiated "
+                                  f"{rc.get('initiated','')}. {rc.get('reason','')}"})
+    for r in rows:
+        if r["surge"] and r["id"] not in seen:
+            items.append({"kind": "surge", "hot": True, "r": r,
+                          "head": f"Surge: {r['name']} at {_mult(r['vs_med'])} its normal monthly volume"})
+            seen.add(r["id"])
+    for r in rows:
+        if r["z"] >= 1.5 and r["id"] not in seen and not r["surge"]:
+            items.append({"kind": "z", "hot": False, "r": r,
+                          "head": f"Above trend: {r['name']} trend-adjusted z {r['z']:+.2f} (trigger 1.5)"})
+            seen.add(r["id"])
+    for r in rows:
+        w = r["wow"]
+        if w is not None and r["id"] not in seen and abs(w) >= max(100, 0.10 * r["latest"]):
+            items.append({"kind": "wow", "hot": False, "r": r,
+                          "head": f"Week-over-week: {r['name']} {w:+,} reports vs 7 days ago"})
+            seen.add(r["id"])
+    noteworthy = bool(items)
 
-    n_up = sum(1 for c in changes if c["kind"] == "signal" and c["upgraded"])
-    n_rc = sum(1 for c in changes if c["kind"] == "recall")
     n_crit = sum(1 for r in rows if r["signal"] == "CRITICAL")
-    n_elev = sum(1 for r in rows if r["signal"] == "ELEVATED")
+    n_up = sum(1 for i in items if i["kind"] == "signal" and i["hot"])
+    n_rc = sum(1 for i in items if i["kind"] == "recall")
+    n_sg = sum(1 for i in items if i["kind"] == "surge")
     bits = []
-    if n_up:
-        bits.append(f"{n_up} upgrade{'s' if n_up > 1 else ''}")
-    if n_rc:
-        bits.append(f"{n_rc} new recall{'s' if n_rc > 1 else ''}")
-    if zcross:
-        bits.append(f"{len(zcross)} above z trigger")
-    if not bits:
-        bits.append("no signal changes")
-    subject = f"MAUDE Monitor {datetime.now().strftime('%b %d')}: " + ", ".join(bits) \
-              + f" | {n_crit} critical, {n_elev} elevated"
+    if n_up: bits.append(f"{n_up} upgrade{'s' if n_up > 1 else ''}")
+    if n_rc: bits.append(f"{n_rc} new recall{'s' if n_rc > 1 else ''}")
+    if n_sg: bits.append(f"{n_sg} surge{'s' if n_sg > 1 else ''}")
+    if not bits: bits.append("no state changes")
+    prefix = "NEW FDA DATA" if refreshed else "no new FDA data"
+    subject = (f"MAUDE Monitor {datetime.now().strftime('%b %d')}: {prefix} | "
+               + ", ".join(bits) + f" | {n_crit} critical")
 
-    # --- HTML ---
+    # ---------- HTML ----------
     H = []
     H.append('<!DOCTYPE html><html><body style="margin:0;padding:0;background:#eef0ee;">')
     H.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef0ee;">'
              '<tr><td align="center" style="padding:20px 10px;">')
-    H.append('<table role="presentation" width="660" cellpadding="0" cellspacing="0" '
-             'style="max-width:660px;width:100%;background:#ffffff;border-radius:10px;'
+    H.append('<table role="presentation" width="680" cellpadding="0" cellspacing="0" '
+             'style="max-width:680px;width:100%;background:#ffffff;border-radius:10px;'
              'font-family:Helvetica,Arial,sans-serif;color:#1d2420;font-size:14px;line-height:1.5;">')
     H.append(f'<tr><td style="background:#1d5a66;color:#ffffff;padding:18px 24px;border-radius:10px 10px 0 0;">'
              f'<div style="font-size:20px;font-weight:700;">MAUDE Monitor</div>'
              f'<div style="font-size:13px;opacity:.9;">{_esc(date_label)} &nbsp;&middot;&nbsp; '
              f'<a href="{DASHBOARD_URL}" style="color:#ffffff;text-decoration:underline;">Open the dashboard</a></div>'
              f'</td></tr>')
+    band_bg, band_tx = ("#e3f1e8", "#1f5c38") if refreshed else ("#f2f3f0", "#4a554e")
+    band = (f"New FDA data has arrived since the last run (dataset last updated {fda_lu}). Everything below reflects it."
+            if refreshed else
+            f"No new FDA data since the last run (dataset last updated {fda_lu}). The board is unchanged; "
+            f"FDA publishes MAUDE updates periodically rather than daily.")
+    H.append(f'<tr><td style="background:{band_bg};color:{band_tx};padding:10px 24px;font-size:13px;">{_esc(band)}</td></tr>')
 
     def section(title):
         H.append(f'<tr><td style="padding:18px 24px 6px;font-size:12px;letter-spacing:.04em;'
                  f'color:#7a857d;font-weight:700;">{_esc(title)}</td></tr>')
 
-    section("What changed since the last run")
-    if changes:
+    section("What matters today")
+    if items:
         H.append('<tr><td style="padding:0 24px;">')
-        for c in changes:
-            color = "#b3272e" if c["upgraded"] else "#2c6e49"
-            H.append(f'<div style="border-left:3px solid {color};padding:6px 10px;margin:0 0 8px;'
-                     f'background:#f2f3f0;border-radius:4px;">{_esc(c["text"])}</div>')
+        for it in items[:8]:
+            color = "#b3272e" if it["hot"] else "#bc5f04"
+            H.append(f'<div style="border-left:3px solid {color};padding:8px 12px;margin:0 0 10px;'
+                     f'background:#f2f3f0;border-radius:4px;"><div style="font-weight:700;">{_esc(it["head"])}</div>'
+                     f'<div style="color:#2b332e;margin-top:3px;">{_esc(_plain(it["r"], bench))}</div>'
+                     f'<div style="margin-top:4px;"><a href="{DASHBOARD_URL}#card-{it["r"]["id"]}" '
+                     f'style="color:#1d5a66;font-size:12px;">Open card on dashboard</a></div></div>')
         H.append('</td></tr>')
     else:
-        H.append('<tr><td style="padding:0 24px;color:#4a554e;">No signal changes or new recalls. '
-                 'Report counts moved as listed below.</td></tr>')
-    if zcross:
-        H.append('<tr><td style="padding:8px 24px 0;color:#4a554e;">Above the z trigger (1.5) without a signal change: '
-                 + ", ".join(f"{_esc(r['name'])} (z {r['z']:+.2f})" for r in zcross) + '.</td></tr>')
-    if movers:
-        H.append('<tr><td style="padding:8px 24px 0;color:#4a554e;">Largest report-count moves since last run: '
-                 + ", ".join(f"{_esc(r['name'])} {_fmt_delta(r['new'])}" for r in movers)
-                 + '. Includes FDA backfill of prior months.</td></tr>')
+        H.append('<tr><td style="padding:0 24px;color:#4a554e;">No name changed state, no new recalls, no surges, '
+                 'and nothing crossed the z trigger. Nothing here requires action today.</td></tr>')
 
-    section("Signal board (worst first)")
+    section("Monthly read (latest complete month vs history)")
     H.append('<tr><td style="padding:0 24px;">'
-             '<table role="presentation" width="100%" cellpadding="6" cellspacing="0" '
-             'style="border-collapse:collapse;font-size:12.5px;">'
+             '<table role="presentation" width="100%" cellpadding="5" cellspacing="0" '
+             'style="border-collapse:collapse;font-size:12px;">'
              '<tr style="background:#f2f3f0;color:#4a554e;">'
-             '<th align="left">Device</th><th align="left">Signal</th><th align="right">R</th>'
-             '<th align="right">z adj</th><th align="right">Reports</th><th align="right">&Delta; run</th>'
-             '<th align="right">D / I 3mo</th></tr>')
+             '<th align="left">Device</th><th align="right">Reports</th><th align="right">vs prior mo</th>'
+             '<th align="right">vs yr ago</th><th align="right">vs 12-mo median</th>'
+             '<th align="right">Deaths/1k (3mo vs base)</th><th align="left">Flag</th></tr>')
     for r in rows:
-        prov = "*" if r["provisional"] else ""
-        H.append(f'<tr style="border-bottom:1px solid #e3e6e1;">'
-                 f'<td>{_esc(r["name"])}<span style="color:#7a857d;"> {_esc(r["ticker"])}</span></td>'
-                 f'<td>{_pill(r["signal"])}</td><td align="right"><b>{r["r"]}</b></td>'
-                 f'<td align="right">{r["z"]:+.2f}</td><td align="right">{r["latest"]:,}{prov}</td>'
-                 f'<td align="right">{_fmt_delta(r["new"])}</td>'
-                 f'<td align="right">{r["deaths3"]} / {r["inj3"]:,}</td></tr>')
+        flag = "surge" if r["surge"] else "batch filing" if r["batch"] else ""
+        fcolor = "#b3272e" if r["surge"] else "#7a857d"
+        dpk = (f"{r['dpk3']:.2f} vs {r['dpk12']:.2f}" if r["dpk3"] is not None and r["dpk12"] is not None else "n/a")
+        H.append(f'<tr style="border-bottom:1px solid #e3e6e1;"><td>{_esc(r["name"])}'
+                 f'<span style="color:#7a857d;"> {_esc(r["ticker"])}</span></td>'
+                 f'<td align="right">{r["latest"]:,}</td><td align="right">{_pct(r["mom"])}</td>'
+                 f'<td align="right">{_pct(r["yoy"])}</td><td align="right">{_mult(r["vs_med"])}</td>'
+                 f'<td align="right">{dpk}</td><td style="color:{fcolor};">{flag}</td></tr>')
     H.append('</table></td></tr>')
     provm = next((r["month"] for r in rows if r["provisional"]), None)
     if provm:
-        H.append(f'<tr><td style="padding:6px 24px 0;font-size:11.5px;color:#7a857d;">* {provm} is the latest '
-                 f'complete month and is still provisional; MAUDE counts keep rising for weeks as late reports arrive.</td></tr>')
+        H.append(f'<tr><td style="padding:6px 24px 0;font-size:11.5px;color:#7a857d;">Latest complete month is '
+                 f'{_mon(provm)} and is provisional: MAUDE counts keep rising for weeks as late reports arrive, '
+                 f'so the month-over-month figure is biased low until it matures.</td></tr>')
 
-    watch = [r for r in rows if (r["z"] >= 1.0 or r["deaths3"] >= 1) and r["signal"] != "NORMAL"]
-    if watch:
+    section("Signal board (worst first)")
+    H.append('<tr><td style="padding:0 24px;">'
+             '<table role="presentation" width="100%" cellpadding="5" cellspacing="0" '
+             'style="border-collapse:collapse;font-size:12px;">'
+             '<tr style="background:#f2f3f0;color:#4a554e;">'
+             '<th align="left">Device</th><th align="left">Signal</th><th align="right">R</th>'
+             '<th align="right">z adj</th><th align="right">&Delta; 7 days</th><th align="right">&Delta; run</th>'
+             '<th align="right">D / I 3mo</th><th align="right">Next earnings</th></tr>')
+    for r in rows:
+        H.append(f'<tr style="border-bottom:1px solid #e3e6e1;">'
+                 f'<td>{_esc(r["name"])}<span style="color:#7a857d;"> {_esc(r["ticker"])}</span></td>'
+                 f'<td>{_pill(r["signal"])}</td><td align="right"><b>{r["r"]}</b></td>'
+                 f'<td align="right">{r["z"]:+.2f}</td><td align="right">{_fmt_delta(r["wow"])}</td>'
+                 f'<td align="right">{_fmt_delta(r["new"])}</td>'
+                 f'<td align="right">{r["deaths3"]} / {r["inj3"]:,}</td>'
+                 f'<td align="right">{_esc(r["earnings"] or "n/a")}</td></tr>')
+    H.append('</table></td></tr>')
+    wsd = meta.get("week_snapshot_date")
+    H.append(f'<tr><td style="padding:6px 24px 0;font-size:11.5px;color:#7a857d;">&Delta; 7 days compares total reports to the '
+             f'{"snapshot from " + _esc(wsd) if wsd else "snapshot from a week ago (not yet available; needs a week of runs)"}; '
+             f'&Delta; run compares to the previous run. Both include FDA backfilling earlier months.</td></tr>')
+
+    flagged = [r for r in rows if r["signal"] in ("CRITICAL", "ELEVATED")]
+    if flagged:
         section("Why these are flagged")
         H.append('<tr><td style="padding:0 24px;">')
-        for r in watch[:6]:
+        for r in flagged[:8]:
             det = r["detail"] or {}
             hits = [c for c in det.get("components", []) if c["points"] > 0]
             why = "; ".join(f"{c['factor'].split(' (')[0]} at {c['value']} ({c['points']} pts)" for c in hits)
             H.append(f'<div style="margin:0 0 8px;"><b>{_esc(r["name"])}</b> is {SIG_PLAIN[r["signal"]]}. '
                      f'{_esc(why) if why else "No factor tripped a threshold."}</div>')
         H.append('</td></tr>')
+        section("What the stock did last time")
+        H.append('<tr><td style="padding:0 24px;">'
+                 '<table role="presentation" width="100%" cellpadding="5" cellspacing="0" '
+                 'style="border-collapse:collapse;font-size:12px;">'
+                 f'<tr style="background:#f2f3f0;color:#4a554e;"><th align="left">Device</th><th align="right">Prior spikes</th>'
+                 f'<th align="right">Lagged {_esc(bench)}</th><th align="right">Avg vs {_esc(bench)} ({_esc(rows[0]["horizon"])})</th><th align="left">Read</th></tr>')
+        for r in flagged[:8]:
+            if r["car_n"]:
+                H.append(f'<tr style="border-bottom:1px solid #e3e6e1;"><td>{_esc(r["name"])}</td>'
+                         f'<td align="right">{r["car_n"]}</td><td align="right">{r["car_hit"]:.0f}%</td>'
+                         f'<td align="right">{r["car_mean"]:+.1f}%</td><td>{_esc(r["car_grade"])}</td></tr>')
+            else:
+                H.append(f'<tr style="border-bottom:1px solid #e3e6e1;"><td>{_esc(r["name"])}</td>'
+                         f'<td align="right" colspan="4" style="color:#7a857d;">not enough history</td></tr>')
+        H.append('</table></td></tr>')
+        H.append('<tr><td style="padding:6px 24px 0;font-size:11.5px;color:#7a857d;">Each prior spike = a month the trend-adjusted z '
+                 'crossed 1.5; the stock\'s next-3-month return is measured against the medtech ETF. Small samples; '
+                 'read as context, not as a forecast.</td></tr>')
 
     fund = meta.get("fundamentals", {})
     H.append('<tr><td style="padding:18px 24px 22px;font-size:11.5px;color:#7a857d;line-height:1.55;border-top:1px solid #e3e6e1;">'
-             'Signals: CRITICAL = R-score 70+, ELEVATED 50-69, WATCH 30-49, NORMAL below 30. '
-             'The R-score combines the trend-adjusted z (latest month vs the device\'s own trend), 6-month slope, '
-             'deaths and injuries in the last 3 months, and reports per $M revenue. '
+             'Signals: CRITICAL = R-score 70+, ELEVATED 50-69, WATCH 30-49, NORMAL below 30. The R-score combines the '
+             'trend-adjusted z (latest month vs the device\'s own trend), 6-month slope, deaths and injuries in the last 3 months, '
+             'and reports per $M revenue. Deaths per 1,000 reports is the comparable severity measure across devices of different size. '
              'MAUDE reports are unverified submissions and do not establish causation; counts are not incidence rates. '
-             f'Fundamentals verified: {fund.get("verified", 0)}/{fund.get("total", 0)}; rate-based metrics are flagged on the dashboard until sourced. '
+             f'Fundamentals verified: {fund.get("verified", 0)}/{fund.get("total", 0)}. '
              f'Run {_esc(meta.get("run_at", ""))}, mode {_esc(meta.get("mode", ""))}. '
              f'<a href="{DASHBOARD_URL}" style="color:#1d5a66;">Full detail on the dashboard</a>.</td></tr>')
     H.append('</table></td></tr></table></body></html>')
     html = "".join(H)
 
-    # --- plain text fallback ---
-    T = [f"MAUDE Monitor {date_label}", DASHBOARD_URL, "", "WHAT CHANGED"]
-    T += [f"  - {c['text']}" for c in changes] or ["  No signal changes or new recalls."]
+    # ---------- plain text ----------
+    T = [f"MAUDE Monitor {date_label}", DASHBOARD_URL, "", band, "", "WHAT MATTERS TODAY"]
+    T += [f"  - {it['head']}\n    {_plain(it['r'], bench)}" for it in items[:8]] or ["  Nothing requires action today."]
     T += ["", "SIGNAL BOARD"]
     for r in rows:
         T.append(f"  {r['name']:<28} {r['signal']:<9} R={r['r']:<3} z={r['z']:+.2f} "
-                 f"reports={r['latest']:,} delta={_fmt_delta(r['new'])}")
+                 f"reports={r['latest']:,} mom={_pct(r['mom'])} yoy={_pct(r['yoy'])} "
+                 f"d7={_fmt_delta(r['wow'])} earnings={r['earnings'] or 'n/a'}")
     text = "\n".join(T)
     return subject, html, text, noteworthy
 
