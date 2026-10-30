@@ -1,7 +1,7 @@
 {
- "updated": "2026-10-29T17:04:19",
+ "updated": "2026-10-30T17:02:55",
  "signals": {
-  "DXCM_G7": "WATCH",
+  "DXCM_G7": "NORMAL",
   "DXCM_G6": "NORMAL",
   "DXCM_ALL": "NORMAL",
   "PODD_OP5": "WATCH",
@@ -18,6 +18,6 @@
   "SQEL_TWIIST": "ELEVATED",
   "PRCT_AQUABEAM": "NORMAL",
   "CVRX_BAROSTIM": "NORMAL",
-  "ABT_VOLT": "WATCH"
+  "ABT_VOLT": "NORMAL"
  }
 }
